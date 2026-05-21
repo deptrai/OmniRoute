@@ -5,6 +5,7 @@
 - **feat(providers):** add 7 free-tier providers (Wave 1) — Arcee AI, InclusionAI, Krutrim, Liquid AI, MonsterAPI, Nomic, and Poolside now available as new API-key providers with provider icons, model specs, and full routing support. ([#2479](https://github.com/diegosouzapw/OmniRoute/pull/2479) — thanks @oyi77)
 - **feat(providers):** add Astraflow provider support with global + China endpoints — new provider with dual-region base URLs for global and mainland China access. ([#2486](https://github.com/diegosouzapw/OmniRoute/pull/2486) — thanks @ucloudnb666)
 - **feat(providers):** add `claude-web` provider — cookie-based Claude Web chat access without OAuth. ([#2476](https://github.com/diegosouzapw/OmniRoute/pull/2476) — thanks @oyi77)
+- **feat(providers):** add 14 free-tier providers (Wave 1b) — 360AI, Baichuan, Baidu, ByteDance/Doubao, IDEO, Kuaishou/Kling, Kunlun/Skywork, SenseTime/SenseNova, Stepfun, Tencent HunYuan, Zhipu GLM, Replicate, RunPod, and Modal with provider icons, model specs, and routing support. ([#2488](https://github.com/diegosouzapw/OmniRoute/pull/2488) — thanks @oyi77)
 
 ### 🔧 Bug Fixes
 
@@ -28,6 +29,16 @@
 - **fix(claude):** gate the heavy-agent beta headers (`context-1m`, `effort`, `advanced-tool-use`) on Opus/Sonnet only — Haiku with OAuth was receiving `context-1m` and rejecting it with 400. Also sanitizes historical `thinking` block signatures in passthrough. ([#2454](https://github.com/diegosouzapw/OmniRoute/issues/2454) — thanks @havockdev)
 - **fix(perplexity-web):** route requests through a Firefox-148 TLS-impersonating client so Perplexity's Cloudflare edge stops rejecting VPS/datacenter IPs with a 403 challenge. ([#2459](https://github.com/diegosouzapw/OmniRoute/issues/2459) — thanks @havockdev)
 - **fix(validation):** guard `apiKey`/`modelsUrl` against non-string values before calling `.startsWith()` / `.trim()` in the provider connection-test path. ([#2463](https://github.com/diegosouzapw/OmniRoute/issues/2463))
+- **fix(cost):** prevent double-billing of `cache_creation_input_tokens` — `prompt_tokens` from token extractors already includes both `cache_read` and `cache_creation`, so `nonCachedInput` now subtracts both cache types to avoid pricing cache at the full input rate. ([#2522](https://github.com/diegosouzapw/OmniRoute/pull/2522) — thanks @herjarsa)
+- **fix(handler):** always normalize system role messages in Claude passthrough paths — `normalizeClaudeUpstreamMessages()` is now called unconditionally in both `compatibleBridge` and pure passthrough, ensuring `role:"system"` messages are always extracted to the top-level `system` parameter. ([#2519](https://github.com/diegosouzapw/OmniRoute/pull/2519) — thanks @herjarsa)
+- **fix(handler):** capture Gemini `thought_signature` in non-streaming response path — the non-streaming translator now captures `thoughtSignature` from Gemini thinking model parts and persists them so follow-up turns can resolve them correctly. ([#2518](https://github.com/diegosouzapw/OmniRoute/pull/2518) — thanks @herjarsa)
+- **fix(kiro):** replace broken social OAuth with device flow — rewrites Kiro's Google/GitHub social login from the broken PKCE `kiro://` custom protocol to AWS Cognito device flow, which works correctly in web/proxy environments. ([#2524](https://github.com/diegosouzapw/OmniRoute/pull/2524) — thanks @disonjer)
+- **fix(providers):** resolve `opencode/` → `opencode-zen` slug mismatch + add 40+ new models — `opencode` is now a proper alias for `opencode-zen` in executor, model resolver, and provider registry; adds GPT 5.x, Claude 4.x, Gemini 3.x, Grok, Kimi, and other models with tests. ([#2517](https://github.com/diegosouzapw/OmniRoute/pull/2517) — thanks @herjarsa)
+
+### 🌐 Internationalization
+
+- **i18n(zh-CN):** translate 830 missing UI strings — replaces all `__MISSING__:` placeholders with proper Chinese translations. ([#2523](https://github.com/diegosouzapw/OmniRoute/pull/2523) — thanks @InkshadeWoods)
+- **i18n(dashboard):** add missing dashboard keys and fix EN fallbacks — hundreds of hardcoded English strings across cache, caveman, costs, skills, memory, and evals pages replaced with `t()` calls. ([#2500](https://github.com/diegosouzapw/OmniRoute/pull/2500) — thanks @Gi99lin)
 
 ### 📝 Maintenance
 
