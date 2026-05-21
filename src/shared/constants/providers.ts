@@ -1924,6 +1924,7 @@ export const APIKEY_PROVIDERS = {
     freeNote: "Free open-source AI app builder + RAG platform.",
     passthroughModels: true,
     authHint: "Get API key from your Dify instance.",
+  },
   poolside: {
     id: "poolside",
     alias: "poolside",

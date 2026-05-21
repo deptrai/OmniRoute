@@ -1,3 +1,9 @@
+# Changelog
+
+## [Unreleased]
+
+---
+
 ## [3.8.2] — 2026-05-21
 
 ### ✨ New Features
@@ -49,46 +55,6 @@
 
 - **chore:** remove Akamai VPS deploy from release workflow and skills.
 - **chore:** ignore `.claude/worktrees` from git tracking.
-
----
-
-
-
-## [3.8.1] — 2026-05-21
-
-### ✨ New Features
-
-- **feat(settings):** Feature Flags Settings Page (Card Grid + DB overrides) — fully implements the feature flags UI dashboard using Variant A (Card Grid) with Glassmorphism, complete with global `GET/PUT/DELETE` API routes, Zod validation, debounced search, category filters, and full 30+ locale i18n support. Resolves priority hierarchy to DB > ENV > Defaults. ([#2457](https://github.com/diegosouzapw/OmniRoute/pull/2457))
-- **feat(db):** multi-driver SQLite abstraction layer — new `SqliteAdapter` interface with 3 concrete adapters (`betterSqliteAdapter`, `nodeSqliteAdapter`, `sqljsAdapter`) and a `driverFactory` that cascades `better-sqlite3` → `node:sqlite` → `sql.js (WASM)`. Enables OmniRoute to run on any JavaScript runtime (Node.js, Bun, Deno, Cloudflare Workers) without native binary dependencies. `better-sqlite3` moved to `optionalDependencies`. ([#2447](https://github.com/diegosouzapw/OmniRoute/pull/2447))
-- **feat(settings):** Claude Fast Mode toggle in Settings › AI — opt-in toggle that forwards `X-CPA-Force-Fast-Mode` header so a paired CLIProxyAPI build can reach Anthropic Fast Mode (`speed:"fast"`). Model-gated to Opus models matching Anthropic's binary KT() check. ([#2449](https://github.com/diegosouzapw/OmniRoute/pull/2449) — thanks @NomenAK)
-- **feat(settings):** Codex Fast Tier — tier dropdown (`default`/`priority`/`flex`) + per-model gate preventing 400 errors from OpenAI when the tier toggle was on for non-Fast-eligible models. ([#2451](https://github.com/diegosouzapw/OmniRoute/pull/2451) — thanks @NomenAK)
-- **feat:** align Antigravity 2.0.1 support — updated client profile, upstream headers, and model aliases. ([#2443](https://github.com/diegosouzapw/OmniRoute/pull/2443) — thanks @dhaern)
-- **feat:** enhance `extractBearer` to support `x-api-key` for Anthropic API style auth. ([#2436](https://github.com/diegosouzapw/OmniRoute/pull/2436) — thanks @thedtvn)
-- **feat(memory):** wire `createMemory` to `upsertSemanticMemoryPoint` (Qdrant). ([#2439](https://github.com/diegosouzapw/OmniRoute/pull/2439) — thanks @NomenAK)
-
-### 🔧 Bug Fixes & Refactors
-
-- **fix(deepseek-web):** rewrite auth to userToken Bearer + WASM PoW solver. ([#2452](https://github.com/diegosouzapw/OmniRoute/pull/2452) — thanks @ovehbe)
-- **chore:** update node dependencies and runtime support. ([#2453](https://github.com/diegosouzapw/OmniRoute/pull/2453) — thanks @backryun)
-- **fix(translator):** fix 3 Kiro `tool_result` defects causing 400 on follow-up turns — missing `tool_use_id` mapping, orphan result blocks, and conversation ID collision on assistant-first turns. ([#2447](https://github.com/diegosouzapw/OmniRoute/pull/2447))
-- **fix(translator):** treat `developer` role as system in OpenAI → Claude translation — `openAIToClaude` now extracts `developer`-role messages into `systemParts` (same as `system`) and filters them from the non-system message list, preventing identity context injected via the Responses API `developer` role from silently becoming an assistant turn when routing to a Claude-format provider. ([#2407](https://github.com/diegosouzapw/OmniRoute/issues/2407))
-- **fix(antigravity):** deduplicate `removeHeaderCaseInsensitive` — export canonical implementation from `antigravityClientProfile.ts` and remove the local copy in `antigravity.ts`; export `AntigravityCredentialsLike` type for cross-module use. (#2433 — thanks @Gi99lin)
-- **refactor(docs):** enhance frontmatter handling in DocPage — gray-matter Date object parsing bug fix. ([#2448](https://github.com/diegosouzapw/OmniRoute/pull/2448) — thanks @ovehbe)
-- **fix(jules):** Jules API parity and cloud-agent provider registration. ([#2438](https://github.com/diegosouzapw/OmniRoute/pull/2438))
-- **fix(i18n):** harden diff key extraction tag sanitization in `extract-keys-from-diff.mjs`.
-- **chore(i18n):** refresh fr/es/de locales + add missing `settings.update` key. ([#2437](https://github.com/diegosouzapw/OmniRoute/pull/2437))
-- **fix(dashboard):** allow bracketed combo names — align dashboard combo-name validator regex with the shared/server schema updated in PR #2354; names like `Claude [1m]` are now accepted in the create/edit form. ([#2458](https://github.com/diegosouzapw/OmniRoute/pull/2458) — thanks @congvc-dev)
-
-### 🔒 Security Fixes
-
-- **fix(security):** replace `execSync` string-template with `spawnSync` arg-array in `plugin.mjs` — eliminates shell command injection via malicious plugin names.
-- **fix(security):** gate Electron CSP `unsafe-eval` on `!app.isPackaged` instead of URL substring match — was leaking `unsafe-eval` into production builds; merged duplicate `connect-src` directives.
-- **fix(api):** add `requireManagementAuth` to `/api/usage/budget/bulk` and `/api/resilience/reset` — both endpoints exposed spend data and circuit-breaker controls without auth.
-- **fix(security):** route catch-block error messages through `sanitizeErrorMessage()` in `gemini-web`, `claude-web`, `copilot-web` executors, `oauth` route, and cloud-agent task routes — prevents stack traces and internal paths leaking into HTTP responses.
-- **fix(codex):** `refreshCredentials` returns `null` (not error-object) on token refresh failure — prevents base executor from spreading `{error}` onto active credentials.
-- **fix(tokenRefresh):** safe `unknown`-error access in `catch` block (`error instanceof Error ? error.message : String(error)`).
-- **fix(combo):** reset `exhaustedProviders` set at start of each set-retry iteration — providers excluded in a failing pass now get a second chance on retry.
-- **fix(circuitBreaker):** persist and restore `lastFailureKind` via the `options` JSON column — kind-based cooldown overrides (`cooldownByKind`) now survive server restarts.
 
 ---
 
