@@ -77,6 +77,8 @@
 - **fix(qoder):** route PAT tokens to Qoder native API instead of DashScope — detects `pt-` prefixed tokens and routes to `api.qoder.com` with proper User-Agent header. ([#2559](https://github.com/diegosouzapw/OmniRoute/pull/2559) — thanks @herjarsa)
 - **fix(perf):** cache compiled RegExp in RTK compression hot path — eliminates thousands of redundant `new RegExp()` instantiations per second. ([#2553](https://github.com/diegosouzapw/OmniRoute/pull/2553) — thanks @soyelmismo)
 - **fix(reasoning-cache):** auto-start periodic cleanup on module load — the `server-init.ts` job was never imported (dead code), causing the `reasoning_cache` table to grow indefinitely. Now runs 30-min cleanup cycles automatically. ([#2552](https://github.com/diegosouzapw/OmniRoute/pull/2552) — thanks @soyelmismo)
+- **fix(claude):** omit `context-1m` beta for Sonnet — restrict to Opus-only to avoid long-context credit gate errors. Add `afk-mode-2026-01-31`, replace `redact-thinking` with `thinking-token-count-2026-05-13`. ([#2568](https://github.com/diegosouzapw/OmniRoute/pull/2568) — thanks @unitythemaker)
+- **fix(codex):** relax `auth_mode` check in frontend import preview — accept `undefined`/`null`/`"chatgpt"` instead of requiring `"chatgpt"` strictly, matching the backend fix in #2536. ([#2567](https://github.com/diegosouzapw/OmniRoute/pull/2567) — thanks @janeza2)
 
 ### 🌐 Internationalization
 
