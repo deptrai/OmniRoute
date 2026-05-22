@@ -12,9 +12,9 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 // ---------- Versions ------------------------------------------------------
 
-export const CLAUDE_CODE_VERSION = "2.1.131";
+export const CLAUDE_CODE_VERSION = "2.1.146";
 /** Bundled @anthropic-ai/sdk version for the pinned CLI release. */
-export const CLAUDE_CODE_STAINLESS_VERSION = "0.81.0";
+export const CLAUDE_CODE_STAINLESS_VERSION = "0.94.0";
 
 // ---------- Stainless OS / Arch / Runtime --------------------------------
 
@@ -340,7 +340,7 @@ export function selectBetaFlags(
   if (hasStructuredOutput && !isFullAgent) flags.push("structured-outputs-2025-12-15");
   // extended-cache-ttl is sent for all full-agent shapes (incl. Haiku); the
   // heavier advanced-tool-use / effort flags are Opus/Sonnet-only.
-  if (isFullAgent) flags.push("extended-cache-ttl-2025-04-11");
+  if (isFullAgent) flags.push("extended-cache-ttl-2025-04-11", "cache-diagnosis-2026-04-07");
   if (isHeavyAgent) {
     flags.push("advanced-tool-use-2025-11-20", "effort-2025-11-24");
   }
