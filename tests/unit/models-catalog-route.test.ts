@@ -659,7 +659,13 @@ test("v1 models catalog exposes Antigravity client-visible preview aliases inste
   assert.equal(response.status, 200);
   assert.ok(ids.has("antigravity/gemini-3-pro-preview"));
   assert.ok(ids.has("antigravity/gemini-3-flash-preview"));
-  assert.equal(ids.has("antigravity/gemini-3.1-pro-high"), false);
+  // #3184/#3303: the Gemini budget tiers (`-high`/`-low`) are user-callable
+  // client-visible aliases on the Antigravity OAuth backend (agy parity), so
+  // they ARE now exposed in the catalog. (They alias to the plain
+  // `gemini-3.1-pro` upstream id — see ANTIGRAVITY_MODEL_ALIASES.)
+  assert.ok(ids.has("antigravity/gemini-3.1-pro-high"));
+  // The legacy `gemini-claude-*` ids are alias KEYS (remapped to live upstream
+  // ids), not public catalog entries, so they stay unexposed.
   assert.equal(ids.has("antigravity/gemini-claude-sonnet-4-5"), false);
   assert.equal(ids.has("antigravity/gemini-claude-sonnet-4-5-thinking"), false);
   assert.equal(ids.has("antigravity/gemini-claude-opus-4-5-thinking"), false);
