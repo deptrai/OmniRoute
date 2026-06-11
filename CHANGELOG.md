@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+---
+
+## [3.8.21] — 2026-06-11
+
 ### ✨ Added
 
 - **feat(cli):** `omniroute autostart` now accepts the shorthand the headless / `omniroute serve` path was missing — `omniroute autostart on` / `... true` (aliases of `enable`), `... off` / `... false` (aliases of `disable`), a new `... toggle`, and a default `... status` (bare `omniroute autostart` is a safe read-only). Previously autostart could only be toggled from the tray (`serve --tray`) or the Electron Appearance tab, so a plain `omniroute serve` user had no way to enable it. (The cross-platform launchd/systemd/registry logic is unchanged — this only wires the ergonomic CLI surface.) ([#3331](https://github.com/diegosouzapw/OmniRoute/issues/3331) — thanks @uniQta)
