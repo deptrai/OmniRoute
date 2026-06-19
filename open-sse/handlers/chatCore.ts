@@ -4,6 +4,7 @@ import { checkSemanticCache } from "./chatCore/semanticCache.ts";
 import { sanitizeChatRequestBody } from "./chatCore/sanitization.ts";
 import { cloneBoundedChatLogPayload, truncateForLog } from "./chatCore/logTruncation.ts";
 import { getHeaderValueCaseInsensitive, isNoMemoryRequested } from "./chatCore/headers.ts";
+import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
 import { getCombosCached, getUpstreamProxyConfigCached } from "./chatCore/comboContextCache.ts";
 export { clearCombosCache, clearUpstreamProxyConfigCache } from "./chatCore/comboContextCache.ts";
 import {
@@ -2607,7 +2608,12 @@ export async function handleChatCore({
   // whenever a reasoning effort is active, yet accept them under reasoning_effort=none (the
   // GPT-5.1+ default). A static unsupportedParams list can't express that, so strip sampling
   // conditionally here. The codex Responses path is already covered by the executor allowlist.
-  translatedBody = stripGpt5SamplingWhenReasoning(translatedBody, provider, finalModelToUpstream, log);
+  translatedBody = stripGpt5SamplingWhenReasoning(
+    translatedBody,
+    provider,
+    finalModelToUpstream,
+    log
+  );
 
   // Rename max_tokens to max_completion_tokens if not supported (#1961)
   if (!supportsMaxTokens({ provider, model })) {
@@ -3111,17 +3117,14 @@ export async function handleChatCore({
                   `429 on connection ${String(failedConnectionId).slice(0, 8)} (attempt ${attempts + 1}/${maxAttempts}), rotating account`
                 );
 
-                // Mark current connection as rate-limited in the DB
+                // Mark only the current Codex model scope as rate-limited.
                 if (failedConnectionId) {
-                  const rateLimitedUntil = new Date(
-                    Date.now() + (retryAfterMs || 60_000)
-                  ).toISOString();
-                  updateProviderConnection(String(failedConnectionId), {
-                    rateLimitedUntil,
-                    testStatus: "unavailable",
-                    lastError: "429 rate limited — codex account rotation",
-                    errorCode: 429,
-                  }).catch(() => {});
+                  await markCodexScopeRateLimited({
+                    failedConnectionId: String(failedConnectionId),
+                    model: modelToCall || model || requestedModel || null,
+                    rateLimitedUntil: new Date(Date.now() + (retryAfterMs || 60_000)).toISOString(),
+                    credentials,
+                  });
                   if (!codexExcludedIds.includes(String(failedConnectionId))) {
                     codexExcludedIds.push(String(failedConnectionId));
                   }
@@ -3137,9 +3140,15 @@ export async function handleChatCore({
                 }
 
                 // Fetch next available codex connection (excluding all previously failed ones)
-                const nextCreds = await getProviderCredentials("codex", null, null, null, {
-                  excludeConnectionIds: [...codexExcludedIds],
-                }).catch(() => null);
+                const nextCreds = await getProviderCredentials(
+                  "codex",
+                  null,
+                  null,
+                  modelToCall || model || requestedModel || null,
+                  {
+                    excludeConnectionIds: [...codexExcludedIds],
+                  }
+                ).catch(() => null);
 
                 if (!nextCreds || nextCreds.allRateLimited) {
                   log?.warn?.("CODEX_FAILOVER", "No more codex accounts available — returning 429");
