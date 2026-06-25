@@ -12,8 +12,8 @@ _In development — bullets added per PR; finalized at release._
 
 ### 🔧 Bug Fixes
 
-- **fix(dashboard):** free proxy pool no longer mis-reports state — "Add to pool" stops optimistically showing "In Pool" when the connectivity probe fails (route returns 422 and the UI now gates on the parsed `success` flag), "Sync All" persists and surfaces a real `lastSyncAt` even when a sync returns zero new proxies, and `REDIS_URL` is now opt-in in `.env.example` (with a state-change-gated `[REDIS] Error:` log throttle) so a non-running localhost no longer floods the logs (#4878).
 - **fix(dashboard):** show custom provider given-name instead of internal id across dashboard pages — cache, combo health, compression analytics, cost overview, health/autopilot, provider stats, route explainability, provider utilization, runtime. Adds shared `resolveProviderName` resolver and `useProviderNodeMap` hook. (#4603)
+- **fix(sse):** fail over on 400 responses carrying rate-limit text — providers like MiMoCode signal throttling with a non-standard 400 whose body reads `"Detected high-frequency non-compliant requests from you."`. These are now classified as fallback-worthy (`RATE_LIMIT_EXCEEDED`, connection-cooldown scope) so combo routing fails over to another free target instead of surfacing `[502]: fetch failed`. Malformed-400 detection still wins, preserving the #2101 infinite-loop guard. (#4976)
 
 ---
 
