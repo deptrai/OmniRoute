@@ -20,6 +20,15 @@ vi.mock("next-intl", () => ({
   useTranslations: () => translate,
 }));
 
+// Import the (heavy) dashboard component ONCE at module load rather than inside every
+// render call. The dynamic import pulls the whole settings-page dependency graph through
+// esbuild on first use (~20s cold); doing it per-test made the first test tip over the
+// 30s per-test timeout while the second (warm, cached) passed. Hoisting moves that cost to
+// module-eval time (outside any per-test timeout) and keeps each test body fast.
+const AuthzSection = (
+  await import("../../../src/app/(dashboard)/dashboard/settings/components/AuthzSection")
+).default;
+
 const cleanupCallbacks: Array<() => void> = [];
 
 function makeContainer(): HTMLElement {
@@ -54,9 +63,6 @@ function mockInventoryFetch(cors: { allowAll: boolean; allowedOrigins: string[] 
 }
 
 async function renderAuthzSection(): Promise<HTMLElement> {
-  const AuthzSection = (
-    await import("../../../src/app/(dashboard)/dashboard/settings/components/AuthzSection")
-  ).default;
   const container = makeContainer();
   await act(async () => {
     createRoot(container).render(React.createElement(AuthzSection));
@@ -69,7 +75,7 @@ async function renderAuthzSection(): Promise<HTMLElement> {
   return container;
 }
 
-describe("AuthzSection wildcard-CORS banner (#5602)", { timeout: 30000 }, () => {
+describe("AuthzSection wildcard-CORS banner (#5602)", { timeout: 60000 }, () => {
   beforeEach(() => {
     (
       globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }

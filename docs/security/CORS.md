@@ -65,9 +65,10 @@ letting CORS **preflight pass** on management routes — which still require aut
 that a cross-origin page cannot provide. It is **not** a session-hijack or
 credential-theft vector on the shared CORS path.
 
-### One genuine exception — `/api/cloud/`
+### One genuine exception — `/api/v1/agents/`
 
-The Cloud-Agent routes set their **own** CORS headers
+The Cloud-Agent routes (`/api/v1/agents/{health,credentials,tasks,tasks/[id]}`) set
+their **own** CORS headers
 (`src/lib/cloudAgent/api.ts`, `getCloudAgentCorsHeaders`) and **do** emit
 `Access-Control-Allow-Origin: <origin>|*` together with
 `Access-Control-Allow-Credentials: true`. This is the single surface where
