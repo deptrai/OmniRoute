@@ -90,6 +90,8 @@
 
 ### 📝 Maintenance
 
+- **oauth (dead-code removal):** delete the superseded legacy OAuth **service-class** hierarchy under `src/lib/oauth/services/`. The live OAuth flow runs through `src/lib/oauth/providers.ts` + `src/lib/oauth/providers/` (wired into the generic `oauth/[provider]/[action]` route); the old per-provider `class *Service extends OAuthService` implementations plus their barrel had **zero** production or test references. Removed `oauth.ts` (base class), `openai.ts`, `github.ts`, `claude.ts`, `codex.ts`, `antigravity.ts`, `qwen.ts`, `qoder.ts`, and the `index.ts` barrel (−1559 LOC). Kept the three still-live files that routes import **directly** by path: `kiro.ts` (Kiro import/exchange routes), `cursor.ts` (Cursor import route), and `codexImport.ts` (utility fns for the Codex bulk-import route). Proven safe by `typecheck:core` staying green (any live reference would fail the build) + a filesystem guard `tests/unit/oauth-legacy-services-removed.test.ts` pinning the removal against re-introduction. Salvage of the closed PR [#5039](https://github.com/diegosouzapw/OmniRoute/pull/5039). gaps v3.8.42 — T10 (5.7).
+
 ---
 
 ## [3.8.42] — 2026-06-30
