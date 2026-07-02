@@ -722,7 +722,17 @@ function openaiToolsToWs(tools: unknown): WsToolDefinition[] | undefined {
   let tier1Count = 0,
     tier2Count = 0,
     tier3Count = 0;
-  for (const t of tools as OpenAITool[]) {
+  // Prioritize MCP tools over builtins: Claude Code sends builtins first
+  // (Agent, Bash, Edit...) which consume the tier-1 full-schema budget.
+  // MCP tools (mcp__*) then fall into tier 2/3 or get dropped entirely.
+  // Reorder so MCP tools get tier-1 full schemas (they need parameter info
+  // the model doesn't inherently know), while builtins — which the model
+  // knows well — tolerate stripped schemas in tier 2/3.
+  const allTools = tools as OpenAITool[];
+  const mcpTools = allTools.filter((t) => t?.function?.name?.startsWith("mcp__"));
+  const builtinTools = allTools.filter((t) => !t?.function?.name?.startsWith("mcp__"));
+  const orderedTools = [...mcpTools, ...builtinTools];
+  for (const t of orderedTools) {
     if (!t?.function?.name) continue;
     const name = t.function.name;
     const rawDesc = typeof t.function.description === "string" ? t.function.description : "";
@@ -762,14 +772,14 @@ function openaiToolsToWs(tools: unknown): WsToolDefinition[] | undefined {
     const entrySize = desc.length + schemaStr.length + name.length;
     if (totalSize + entrySize > WS_TOOLS_SIZE_BUDGET) {
       // Budget exhausted — log dropped tools and stop
-      const droppedNames = (tools as OpenAITool[])
+      const droppedNames = orderedTools
         .slice(out.length)
         .map((tt) => tt?.function?.name)
         .filter(Boolean) as string[];
       if (droppedNames.length > 0) {
         console.warn(
           `[WINDSURF_TOOLS] Dropped ${droppedNames.length} tools (budget exhausted at ${totalSize}/${WS_TOOLS_SIZE_BUDGET}). ` +
-            `Kept ${out.length}/${tools.length} (tier1=${tier1Count}, tier2=${tier2Count}, tier3=${tier3Count}). ` +
+            `Kept ${out.length}/${allTools.length} (tier1=${tier1Count}, tier2=${tier2Count}, tier3=${tier3Count}). ` +
             `Dropped (first 10): ${droppedNames.slice(0, 10).join(", ")}`
         );
       }
