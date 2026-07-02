@@ -307,7 +307,22 @@ function buildMetadata(apiKey: string, sessionId: string): Uint8Array {
   return concatBytes(parts);
 }
 
-type WsChatMessage = { role: string; content: string; toolCallId?: string };
+type WsToolCall = { id: string; name: string; argumentsJson: string };
+type WsChatMessage = {
+  role: string;
+  content: string;
+  toolCallId?: string;
+  toolCalls?: WsToolCall[];
+};
+
+// ChatToolCall { string id = 1; string name = 2; string arguments_json = 3; }
+function buildChatToolCall(tc: WsToolCall): Uint8Array {
+  return concatBytes([
+    encodeString(1, tc.id), // id
+    encodeString(2, tc.name), // name
+    encodeString(3, tc.argumentsJson), // arguments_json
+  ]);
+}
 
 function buildChatMessagePrompt(msg: WsChatMessage): Uint8Array {
   const parts: Uint8Array[] = [
@@ -315,8 +330,48 @@ function buildChatMessagePrompt(msg: WsChatMessage): Uint8Array {
     encodeVarintField(2, roleToSource(msg.role)), // source enum
     encodeString(3, msg.content), // prompt (text content)
   ];
+  // field 6: repeated ChatToolCall tool_calls (assistant messages with tool calls)
+  if (msg.toolCalls) {
+    for (const tc of msg.toolCalls) {
+      parts.push(encodeMessage(6, buildChatToolCall(tc)));
+    }
+  }
   if (msg.toolCallId) {
     parts.push(encodeString(7, msg.toolCallId)); // tool_call_id
+  }
+  return concatBytes(parts);
+}
+
+// ChatToolDefinition { string name = 1; string description = 2; string json_schema_string = 3; bool strict = 4; }
+type WsToolDefinition = {
+  name: string;
+  description: string;
+  jsonSchemaString: string;
+  strict?: boolean;
+};
+
+function buildChatToolDefinition(tool: WsToolDefinition): Uint8Array {
+  const parts: Uint8Array[] = [
+    encodeString(1, tool.name), // name
+    encodeString(2, tool.description), // description
+    encodeString(3, tool.jsonSchemaString), // json_schema_string
+  ];
+  if (tool.strict) {
+    parts.push(encodeVarintField(4, 1)); // strict (bool, varint)
+  }
+  return concatBytes(parts);
+}
+
+// ChatToolChoice { string option_name = 1; string tool_name = 2; }
+type WsToolChoice = { optionName?: string; toolName?: string };
+
+function buildChatToolChoice(choice: WsToolChoice): Uint8Array {
+  const parts: Uint8Array[] = [];
+  if (choice.optionName) {
+    parts.push(encodeString(1, choice.optionName)); // option_name: "auto" | "any" | "none"
+  }
+  if (choice.toolName) {
+    parts.push(encodeString(2, choice.toolName)); // tool_name (specific tool)
   }
   return concatBytes(parts);
 }
@@ -324,7 +379,9 @@ function buildChatMessagePrompt(msg: WsChatMessage): Uint8Array {
 function buildGetChatMessageRequest(
   apiKey: string,
   model: string,
-  messages: WsChatMessage[]
+  messages: WsChatMessage[],
+  tools?: WsToolDefinition[],
+  toolChoice?: WsToolChoice
 ): Uint8Array {
   const sessionId = randomUUID();
   const cascadeId = randomUUID();
@@ -341,6 +398,18 @@ function buildGetChatMessageRequest(
 
   for (const msg of messages) {
     parts.push(encodeMessage(3, buildChatMessagePrompt(msg))); // chat_message_prompts
+  }
+
+  // field 10: repeated ChatToolDefinition tools — native tool definitions
+  if (tools && tools.length > 0) {
+    for (const tool of tools) {
+      parts.push(encodeMessage(10, buildChatToolDefinition(tool)));
+    }
+  }
+
+  // field 12: ChatToolChoice tool_choice
+  if (toolChoice && (toolChoice.optionName || toolChoice.toolName)) {
+    parts.push(encodeMessage(12, buildChatToolChoice(toolChoice)));
   }
 
   // request_type = CASCADE (5) — required for chat completions via the API server.
@@ -371,21 +440,28 @@ function grpcWebFrame(payload: Uint8Array): Uint8Array {
 //
 // GetChatMessageResponse (exa.api_server_pb.GetChatMessageResponse):
 //   field 1  (string)  → message_id
+//   field 2  (message) → timestamp
 //   field 3  (string)  → delta_text      (content text delta)
 //   field 4  (uint32)  → delta_tokens
-//   field 5  (enum)    → stop_reason      (0=UNSPECIFIED, non-zero = done)
+//   field 5  (enum)    → stop_reason      (0=UNSPECIFIED, 2=STOP_PATTERN, 3=MAX_TOKENS, 10=FUNCTION_CALL, 13=ERROR)
+//   field 6  (message) → delta_tool_calls (repeated ChatToolCall)
 //   field 7  (message) → usage (ModelUsageStats)
 //   field 9  (string)  → delta_thinking
 //   field 13 (message) → completion_profile
 //   field 15 (string)  → output_id
 //
+// ChatToolCall { string id = 1; string name = 2; string arguments_json = 3; }
+//
 // ModelUsageStats (exa.codeium_common_pb.ModelUsageStats):
 //   field 2 (uint64) → input_tokens
 //   field 3 (uint64) → output_tokens
 
+type DecodedToolCall = { id: string; name: string; argumentsJson: string };
+
 type DecodedResponse = {
   deltaText: string;
   deltaThinking: string;
+  deltaToolCalls: DecodedToolCall[];
   stopReason: number;
   inputTokens: number;
   outputTokens: number;
@@ -409,6 +485,7 @@ function decodeGetChatMessageResponse(buf: Uint8Array): DecodedResponse {
   let offset = 0;
   let deltaText = "";
   let deltaThinking = "";
+  const deltaToolCalls: DecodedToolCall[] = [];
   let stopReason = 0;
   let inputTokens = 0;
   let outputTokens = 0;
@@ -429,6 +506,10 @@ function decodeGetChatMessageResponse(buf: Uint8Array): DecodedResponse {
       if (fieldNum === 3) {
         // delta_text (string)
         deltaText = TEXT_DEC.decode(payload);
+      } else if (fieldNum === 6) {
+        // delta_tool_calls (repeated ChatToolCall) — parse nested message
+        const tc = decodeChatToolCall(payload);
+        if (tc) deltaToolCalls.push(tc);
       } else if (fieldNum === 7) {
         // usage (ModelUsageStats) — extract input_tokens (field 2) and output_tokens (field 3)
         let uoff = 0;
@@ -455,7 +536,7 @@ function decodeGetChatMessageResponse(buf: Uint8Array): DecodedResponse {
           }
         }
       } else if (fieldNum === 9) {
-        // delta_thinking (string)
+        // delta_thinking (string) — GLM models stream text content here
         deltaThinking = TEXT_DEC.decode(payload);
       }
       // other length-delimited fields are skipped
@@ -473,15 +554,59 @@ function decodeGetChatMessageResponse(buf: Uint8Array): DecodedResponse {
     }
   }
 
-  return { deltaText, deltaThinking, stopReason, inputTokens, outputTokens };
+  return { deltaText, deltaThinking, deltaToolCalls, stopReason, inputTokens, outputTokens };
+}
+
+/** Decode a ChatToolCall protobuf payload: { string id = 1; string name = 2; string arguments_json = 3; }
+ *  Returns partial tool calls (e.g. arguments-only frames) — does NOT require name. */
+function decodeChatToolCall(buf: Uint8Array): DecodedToolCall | null {
+  let off = 0;
+  let id = "";
+  let name = "";
+  let argumentsJson = "";
+  while (off < buf.length) {
+    let tag: number;
+    [tag, off] = readVarint(buf, off);
+    const fn = tag >>> 3;
+    const wt = tag & 0x07;
+    if (wt === 2) {
+      let len: number;
+      [len, off] = readVarint(buf, off);
+      const val = TEXT_DEC.decode(buf.slice(off, off + len));
+      off += len;
+      if (fn === 1) id = val;
+      else if (fn === 2) name = val;
+      else if (fn === 3) argumentsJson = val;
+    } else if (wt === 0) {
+      let v: number;
+      [v, off] = readVarint(buf, off);
+    } else if (wt === 1) {
+      off += 8;
+    } else if (wt === 5) {
+      off += 4;
+    } else {
+      break;
+    }
+  }
+  // Return partial tool call even without name — it may be an arguments-only
+  // streaming frame. The caller will merge it into the most recent tool call.
+  if (!id && !name && !argumentsJson) return null;
+  return { id, name, argumentsJson };
 }
 
 // ─── Convert OpenAI messages → Windsurf WsChatMessage[] ──────────────────────
+
+type OpenAIToolCall = {
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+};
 
 type OpenAIMessage = {
   role?: string;
   content?: unknown;
   tool_call_id?: string;
+  tool_calls?: OpenAIToolCall[];
 };
 
 function openAIMessagesToWs(messages: OpenAIMessage[]): WsChatMessage[] {
@@ -506,9 +631,133 @@ function openAIMessagesToWs(messages: OpenAIMessage[]): WsChatMessage[] {
         }
       }
     }
-    out.push({ role, content, toolCallId: m.tool_call_id });
+    // Convert OpenAI tool_calls → Windsurf ChatToolCall (field 6 in ChatMessagePrompt)
+    let toolCalls: WsToolCall[] | undefined;
+    if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      toolCalls = m.tool_calls.map((tc) => ({
+        id: tc.id || `call-${randomUUID()}`,
+        name: tc.function?.name || "",
+        argumentsJson: tc.function?.arguments || "{}",
+      }));
+    }
+    out.push({ role, content, toolCallId: m.tool_call_id, toolCalls });
   }
   return out;
+}
+
+// ─── Convert OpenAI tools → Windsurf ChatToolDefinition[] ────────────────────
+
+type OpenAITool = {
+  type?: string;
+  function?: {
+    name?: string;
+    description?: string;
+    parameters?: unknown;
+  };
+};
+
+// Windsurf's GetChatMessage API rejects tool payloads larger than ~57KB with a
+// 502 "internal error". Claude Code sends 28 tools with verbose descriptions
+// and full JSON Schema metadata (~87KB). To stay under the limit we sanitize
+// each tool: truncate the description and strip non-essential JSON Schema fields
+// ($schema, additionalProperties, default, minimum, maximum, property-level
+// descriptions) while preserving the structural fields the model needs to call
+// the tool correctly (type, properties, required, enum).
+const WS_MAX_TOOL_DESC_LEN = 200;
+const WS_TOOLS_SIZE_BUDGET = 50000; // conservative limit under the ~57KB threshold
+
+/** Recursively strip non-essential JSON Schema fields to reduce payload size. */
+function sanitizeJsonSchema(node: unknown): unknown {
+  if (node === null || typeof node !== "object") return node;
+  if (Array.isArray(node)) return node.map(sanitizeJsonSchema);
+  const obj = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  // Keep only structural fields; drop metadata that bloats the payload.
+  const KEEP = new Set([
+    "type",
+    "properties",
+    "required",
+    "enum",
+    "items",
+    "anyOf",
+    "oneOf",
+    "allOf",
+    "const",
+    "description",
+  ]);
+  for (const [k, v] of Object.entries(obj)) {
+    if (!KEEP.has(k)) continue; // skip $schema, additionalProperties, default, minimum, maximum, title, $ref, etc.
+    if (k === "description") {
+      // Keep top-level property descriptions but truncate
+      const s = typeof v === "string" ? v : String(v);
+      out[k] = s.length > 80 ? s.slice(0, 80) + "…" : s;
+    } else if (k === "properties") {
+      // IMPORTANT: The keys of "properties" are arbitrary property names
+      // (e.g. "expression", "file_path"). We must NOT filter them through KEEP.
+      // Instead, recursively sanitize each property's value (its schema).
+      const props: Record<string, unknown> = {};
+      for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
+        props[pk] = sanitizeJsonSchema(pv);
+      }
+      out[k] = props;
+    } else {
+      out[k] = sanitizeJsonSchema(v);
+    }
+  }
+  return out;
+}
+
+function openaiToolsToWs(tools: unknown): WsToolDefinition[] | undefined {
+  if (!Array.isArray(tools) || tools.length === 0) return undefined;
+  const out: WsToolDefinition[] = [];
+  let totalSize = 0;
+  for (const t of tools as OpenAITool[]) {
+    if (!t?.function?.name) continue;
+    const rawDesc = typeof t.function.description === "string" ? t.function.description : "";
+    const desc =
+      rawDesc.length > WS_MAX_TOOL_DESC_LEN
+        ? rawDesc.slice(0, WS_MAX_TOOL_DESC_LEN) + "…"
+        : rawDesc;
+    let schemaStr = "{}";
+    try {
+      const sanitized = sanitizeJsonSchema(t.function.parameters);
+      schemaStr = t.function.parameters ? JSON.stringify(sanitized) : "{}";
+    } catch {
+      schemaStr = "{}";
+    }
+    // Check budget — if adding this tool would exceed the limit, stop adding more.
+    const entrySize = desc.length + schemaStr.length + (t.function.name?.length || 0);
+    if (totalSize + entrySize > WS_TOOLS_SIZE_BUDGET) break;
+    totalSize += entrySize;
+    out.push({
+      name: t.function.name,
+      description: desc,
+      jsonSchemaString: schemaStr,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+// ─── Convert OpenAI tool_choice → Windsurf ChatToolChoice ───────────────────
+
+function openaiToolChoiceToWs(toolChoice: unknown): WsToolChoice | undefined {
+  if (!toolChoice) return undefined;
+  if (typeof toolChoice === "string") {
+    // "auto" | "none" | "required"
+    if (toolChoice === "auto") return { optionName: "auto" };
+    if (toolChoice === "none") return { optionName: "none" };
+    if (toolChoice === "required") return { optionName: "any" };
+    return undefined;
+  }
+  if (typeof toolChoice === "object") {
+    const tc = toolChoice as Record<string, unknown>;
+    const fn = tc.function as Record<string, unknown> | undefined;
+    if (fn?.name) return { toolName: String(fn.name) };
+    if (tc.type === "auto") return { optionName: "auto" };
+    if (tc.type === "none") return { optionName: "none" };
+    if (tc.type === "any" || tc.type === "required") return { optionName: "any" };
+  }
+  return undefined;
 }
 
 // ─── WindsurfExecutor ─────────────────────────────────────────────────────────
@@ -573,6 +822,15 @@ export class WindsurfExecutor extends BaseExecutor {
     // Parse OpenAI messages from request body
     const b = (body ?? {}) as Record<string, unknown>;
     const rawMessages = Array.isArray(b.messages) ? (b.messages as OpenAIMessage[]) : [];
+
+    // Native tool support: Windsurf's GetChatMessageRequest accepts tool
+    // definitions (field 10), tool_choice (field 12), and tool_calls in
+    // ChatMessagePrompt (field 6). Convert OpenAI tools/tool_choice to the
+    // Windsurf protobuf format so models like GLM-5.2 can emit native tool_calls.
+    const wsTools = openaiToolsToWs(b.tools);
+    const wsToolChoice = openaiToolChoiceToWs(b.tool_choice);
+    const hasTools = wsTools !== undefined && wsTools.length > 0;
+
     const wsMessages = openAIMessagesToWs(rawMessages);
 
     if (wsMessages.length === 0) {
@@ -581,14 +839,23 @@ export class WindsurfExecutor extends BaseExecutor {
 
     // Build the protobuf request and frame it for Connect streaming protocol.
     // Connect streaming framing: 1 byte flags (0=no compression) + 4 bytes BE length + payload.
-    const protoPayload = buildGetChatMessageRequest(apiKey, wsModel, wsMessages);
+    const protoPayload = buildGetChatMessageRequest(
+      apiKey,
+      wsModel,
+      wsMessages,
+      wsTools,
+      wsToolChoice
+    );
     const framedPayload = grpcWebFrame(protoPayload); // same format as gRPC-web data frame
 
     const url = this.buildUrl();
     const headers = this.buildHeaders(credentials);
     mergeUpstreamExtraHeaders(headers, upstreamExtraHeaders);
 
-    log?.info?.("WS", `Windsurf → ${wsModel} (${wsMessages.length} messages)`);
+    log?.info?.(
+      "WS",
+      `Windsurf → ${wsModel} (${wsMessages.length} messages${hasTools ? `, ${wsTools!.length} tools native` : ""})`
+    );
 
     const upstream = await fetch(url, {
       method: "POST",
@@ -601,8 +868,10 @@ export class WindsurfExecutor extends BaseExecutor {
       return { response: upstream, url, headers, transformedBody: protoPayload };
     }
 
-    // Transform Connect binary response → SSE stream
-    const sseResponse = this.transformToSSE(upstream, model, stream);
+    // Transform Connect binary response → SSE stream.
+    // Native tool_calls (delta_tool_calls field 6) are parsed from the
+    // protobuf response and emitted as OpenAI tool_calls deltas.
+    const sseResponse = this.transformToSSE(upstream, model, stream, hasTools);
     return { response: sseResponse, url, headers, transformedBody: protoPayload };
   }
 
@@ -613,7 +882,12 @@ export class WindsurfExecutor extends BaseExecutor {
    *    flags bit 1 (0x02): trailer frame (payload = key:value\n pairs)
    *  Data frames contain a GetChatMessageResponse protobuf message.
    */
-  private transformToSSE(upstream: Response, model: string, _stream: boolean): Response {
+  private transformToSSE(
+    upstream: Response,
+    model: string,
+    _stream: boolean,
+    hasTools: boolean
+  ): Response {
     const responseId = `chatcmpl-ws-${Date.now()}`;
     const created = Math.floor(Date.now() / 1000);
 
@@ -625,9 +899,39 @@ export class WindsurfExecutor extends BaseExecutor {
         let promptTokens = 0;
         let completionTokens = 0;
         let hadError: string | null = null;
+        let sawToolCalls = false;
+        // Track tool calls by stable key (id or name) → { index, started }.
+        // Windsurf streams tool call arguments across multiple delta_tool_calls
+        // frames. Each frame for the SAME tool call must use the SAME OpenAI
+        // `index` so downstream translators (openai-to-claude) accumulate
+        // arguments into a single content_block instead of creating a new
+        // content_block_start per frame (which produced input:{} + InputValidationError).
+        // Additionally, Windsurf sends arguments-only frames (ChatToolCall with
+        // only field 3, no id or name) — these must be merged into the most
+        // recent tool call.
+        const toolCallMap = new Map<string, { index: number; started: boolean }>();
+        let nextToolCallIndex = 0;
+        let lastToolCallKey: string | null = null; // for arguments-only frames
 
         function emit(data: string) {
           controller.enqueue(enc.encode(data));
+        }
+
+        function ensureRole() {
+          if (!roleEmitted) {
+            emit(
+              `data: ${JSON.stringify({
+                id: responseId,
+                object: "chat.completion.chunk",
+                created,
+                model,
+                choices: [
+                  { index: 0, delta: { role: "assistant", content: "" }, finish_reason: null },
+                ],
+              })}\n\n`
+            );
+            roleEmitted = true;
+          }
         }
 
         try {
@@ -663,6 +967,12 @@ export class WindsurfExecutor extends BaseExecutor {
               } catch {
                 // not JSON, ignore
               }
+              // Windsurf sometimes puts the error in a "message" field directly
+              const msgField = /message:\s*(.+)/i.exec(trailer);
+              if (msgField && /rate limit|error|invalid/i.test(msgField[1])) {
+                hadError = msgField[1].trim();
+                return;
+              }
               return;
             }
 
@@ -671,20 +981,7 @@ export class WindsurfExecutor extends BaseExecutor {
 
             if (resp.deltaText) {
               totalText += resp.deltaText;
-              if (!roleEmitted) {
-                emit(
-                  `data: ${JSON.stringify({
-                    id: responseId,
-                    object: "chat.completion.chunk",
-                    created,
-                    model,
-                    choices: [
-                      { index: 0, delta: { role: "assistant", content: "" }, finish_reason: null },
-                    ],
-                  })}\n\n`
-                );
-                roleEmitted = true;
-              }
+              ensureRole();
               emit(
                 `data: ${JSON.stringify({
                   id: responseId,
@@ -694,6 +991,99 @@ export class WindsurfExecutor extends BaseExecutor {
                   choices: [{ index: 0, delta: { content: resp.deltaText }, finish_reason: null }],
                 })}\n\n`
               );
+            }
+
+            // GLM models stream text content via field 9 (delta_thinking)
+            // instead of field 3 (delta_text). Emit it as content too.
+            if (resp.deltaThinking) {
+              totalText += resp.deltaThinking;
+              ensureRole();
+              emit(
+                `data: ${JSON.stringify({
+                  id: responseId,
+                  object: "chat.completion.chunk",
+                  created,
+                  model,
+                  choices: [
+                    { index: 0, delta: { content: resp.deltaThinking }, finish_reason: null },
+                  ],
+                })}\n\n`
+              );
+            }
+
+            // Native tool calls: delta_tool_calls (field 6, repeated ChatToolCall)
+            // Windsurf streams tool call arguments across multiple frames. We
+            // must use a STABLE index per tool call (keyed by id or name) so
+            // that downstream translators accumulate arguments into one block.
+            // First frame for a tool call: emit id + name + initial args.
+            // Subsequent frames: emit same index, only the argument fragment
+            // (no id/name) so the translator appends to the existing block.
+            if (resp.deltaToolCalls && resp.deltaToolCalls.length > 0) {
+              sawToolCalls = true;
+              ensureRole();
+              for (const tc of resp.deltaToolCalls) {
+                // Determine if this is a new tool call, a continuation, or
+                // an arguments-only partial frame (no id or name).
+                let key: string;
+                if (tc.id) {
+                  key = tc.id;
+                } else if (tc.name) {
+                  key = tc.name;
+                } else if (lastToolCallKey) {
+                  // Arguments-only frame — merge into the most recent tool call
+                  key = lastToolCallKey;
+                } else {
+                  // No prior tool call — skip orphan arguments frame
+                  continue;
+                }
+
+                let entry = toolCallMap.get(key);
+                if (!entry) {
+                  entry = { index: nextToolCallIndex++, started: false };
+                  toolCallMap.set(key, entry);
+                }
+                lastToolCallKey = key;
+
+                const isFirst = !entry.started;
+                entry.started = true;
+
+                const toolCallDelta: Record<string, unknown> = {
+                  index: entry.index,
+                  type: "function",
+                };
+
+                if (isFirst) {
+                  // First frame: include id + name so the translator creates
+                  // a single content_block_start for this tool call.
+                  toolCallDelta.id = tc.id || `call-${Date.now()}-${entry.index}`;
+                  toolCallDelta.function = {
+                    name: tc.name,
+                    arguments: tc.argumentsJson || "",
+                  };
+                } else {
+                  // Subsequent frame: only send argument fragment. No id/name
+                  // so the translator accumulates into the existing block.
+                  toolCallDelta.function = {
+                    arguments: tc.argumentsJson || "",
+                  };
+                }
+
+                emit(
+                  `data: ${JSON.stringify({
+                    id: responseId,
+                    object: "chat.completion.chunk",
+                    created,
+                    model,
+                    choices: [
+                      {
+                        index: 0,
+                        delta: { tool_calls: [toolCallDelta] },
+                        finish_reason: null,
+                      },
+                    ],
+                  })}\n\n`
+                );
+              }
             }
 
             if (resp.inputTokens > 0) promptTokens = resp.inputTokens;
@@ -740,14 +1130,16 @@ export class WindsurfExecutor extends BaseExecutor {
             // If we already streamed partial text, emit a normal finish_reason="stop"
             // so the client treats this as a complete (truncated) response rather than
             // retrying and accumulating duplicate partial outputs (#b655de7b).
-            if (roleEmitted && totalText) {
+            if (roleEmitted && (totalText || sawToolCalls)) {
               emit(
                 `data: ${JSON.stringify({
                   id: responseId,
                   object: "chat.completion.chunk",
                   created,
                   model,
-                  choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                  choices: [
+                    { index: 0, delta: {}, finish_reason: sawToolCalls ? "tool_calls" : "stop" },
+                  ],
                 })}\n\n`
               );
               emit("data: [DONE]\n\n");
@@ -790,13 +1182,13 @@ export class WindsurfExecutor extends BaseExecutor {
             );
           }
 
-          // Finish chunk
+          // Finish chunk — use "tool_calls" finish_reason if we emitted any tool calls
           const finishPayload: Record<string, unknown> = {
             id: responseId,
             object: "chat.completion.chunk",
             created,
             model,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            choices: [{ index: 0, delta: {}, finish_reason: sawToolCalls ? "tool_calls" : "stop" }],
           };
           if (promptTokens > 0 || completionTokens > 0) {
             finishPayload.usage = {
