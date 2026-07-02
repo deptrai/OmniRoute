@@ -743,16 +743,43 @@ function openaiToolsToWs(tools: unknown): WsToolDefinition[] | undefined {
   let tier1Count = 0,
     tier2Count = 0,
     tier3Count = 0;
-  // Prioritize MCP tools over builtins: Claude Code sends builtins first
-  // (Agent, Bash, Edit...) which consume the tier-1 full-schema budget.
-  // MCP tools (mcp__*) then fall into tier 2/3 or get dropped entirely.
-  // Reorder so MCP tools get tier-1 full schemas (they need parameter info
-  // the model doesn't inherently know), while builtins — which the model
-  // knows well — tolerate stripped schemas in tier 2/3.
+  // Prioritize tools by schema criticality:
+  //   1. Critical builtins (Write, Edit, Read, Bash...) — model uses these most
+  //      and MUST see exact params to avoid guessing wrong field names.
+  //   2. MCP tools (mcp__*) — model doesn't inherently know their params.
+  //   3. Non-critical builtins (Agent, Task, etc.) — model can tolerate stripped
+  //      schemas in tier 2/3 since they're used less frequently.
+  // Without this, GLM-5.2 confuses Write params with Edit params (e.g. sends
+  // `new_string`/`old_string` to Write instead of `content`, or `relative_path`
+  // instead of `file_path`) because the schema was stripped to {"type":"object"}.
+  const WS_CRITICAL_BUILTINS = new Set([
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "Read",
+    "Bash",
+    "Glob",
+    "Grep",
+    "WebSearch",
+    "WebFetch",
+    "TodoWrite",
+    "NotebookEdit",
+    "LS",
+  ]);
   const allTools = tools as OpenAITool[];
-  const mcpTools = allTools.filter((t) => t?.function?.name?.startsWith("mcp__"));
-  const builtinTools = allTools.filter((t) => !t?.function?.name?.startsWith("mcp__"));
-  const orderedTools = [...mcpTools, ...builtinTools];
+  const criticalBuiltinTools = allTools.filter(
+    (t) => t?.function?.name && WS_CRITICAL_BUILTINS.has(t.function.name)
+  );
+  const mcpTools = allTools.filter(
+    (t) => t?.function?.name?.startsWith("mcp__") && !WS_CRITICAL_BUILTINS.has(t.function.name)
+  );
+  const otherBuiltinTools = allTools.filter(
+    (t) =>
+      t?.function?.name &&
+      !t.function.name.startsWith("mcp__") &&
+      !WS_CRITICAL_BUILTINS.has(t.function.name)
+  );
+  const orderedTools = [...criticalBuiltinTools, ...mcpTools, ...otherBuiltinTools];
   for (const t of orderedTools) {
     if (!t?.function?.name) continue;
     const name = t.function.name;
