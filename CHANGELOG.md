@@ -46,6 +46,8 @@
 
 ### 🔧 Bug Fixes
 
+- **docs (pnpm global install):** replaced the unsupported `pnpm approve-builds -g` step with the install-time `pnpm add -g omniroute@latest --allow-build=better-sqlite3` flag across README + Setup Guide (and i18n mirrors), fixing native-build approval for pnpm v11 global installs. ([#5554](https://github.com/diegosouzapw/OmniRoute/issues/5554))
+
 - **dashboard (token badge):** the red "Token Expired" connection badge no longer flashes for OAuth refresh-capable providers (Antigravity/Gemini) whose access token merely lapsed but is auto-refreshed — it now shows only when the connection is terminally expired (`testStatus === "expired"`). Continuation of #5326. Regression guard: `tests/unit/ui/connection-row-token-badge-5836.test.tsx`. ([#5836](https://github.com/diegosouzapw/OmniRoute/issues/5836))
 
 - **db (auto backup toggle):** full pre-write SQLite backups now honor the persisted `backup.autoBackupEnabled` dashboard setting — previously only the `DISABLE_SQLITE_AUTO_BACKUP` env var was checked, so disabling auto-backup in the UI had no effect and ~70MB pre-write snapshots kept firing. Manual and pre-restore backups still always run. Regression guard: `tests/unit/db-backup-autobackup-setting-5871.test.ts`. ([#5871](https://github.com/diegosouzapw/OmniRoute/issues/5871))
