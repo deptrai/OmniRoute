@@ -8,7 +8,7 @@ export const windsurfProvider: RegistryEntry = {
   // gRPC-web endpoint — handled entirely inside WindsurfExecutor.
   // Model IDs are the canonical Windsurf catalog names (with dots), auto-synced
   // from the Windsurf cloud via GetCascadeModelConfigs. Source: guanxiaol/WindsurfPoolAPI.
-  baseUrl: "https://server.self-serve.windsurf.com",
+  baseUrl: "https://server.codeium.com",
   authType: "oauth",
   authHeader: "Authorization",
   authPrefix: "Bearer ",
@@ -21,6 +21,17 @@ export const windsurfProvider: RegistryEntry = {
     { id: "swe-1.6", name: "SWE-1.6" },
     { id: "swe-1.5-fast", name: "SWE-1.5 Fast" },
     { id: "swe-1.5", name: "SWE-1.5" },
+    // ── Claude Opus 4.8 — effort-tiered ─────────────────────────────────
+    { id: "claude-opus-4.8-max", name: "Claude Opus 4.8 Max", contextLength: 200000 },
+    { id: "claude-opus-4.8-xhigh", name: "Claude Opus 4.8 XHigh", contextLength: 200000 },
+    { id: "claude-opus-4.8-high", name: "Claude Opus 4.8 High", contextLength: 200000 },
+    { id: "claude-opus-4.8-medium", name: "Claude Opus 4.8 Medium", contextLength: 200000 },
+    { id: "claude-opus-4.8-low", name: "Claude Opus 4.8 Low", contextLength: 200000 },
+    // ── Claude Sonnet 5 — effort-tiered ─────────────────────────────────
+    { id: "claude-sonnet-5-max", name: "Claude Sonnet 5 Max", contextLength: 200000 },
+    { id: "claude-sonnet-5-high", name: "Claude Sonnet 5 High", contextLength: 200000 },
+    { id: "claude-sonnet-5-medium", name: "Claude Sonnet 5 Medium", contextLength: 200000 },
+    { id: "claude-sonnet-5-low", name: "Claude Sonnet 5 Low", contextLength: 200000 },
     // ── Claude Opus 4.7 — effort-tiered ─────────────────────────────────
     { id: "claude-opus-4.7-max", name: "Claude Opus 4.7 Max", contextLength: 200000 },
     { id: "claude-opus-4.7-xhigh", name: "Claude Opus 4.7 XHigh", contextLength: 200000 },
@@ -112,8 +123,11 @@ export const windsurfProvider: RegistryEntry = {
     { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", contextLength: 1000000 },
     // ── Others ───────────────────────────────────────────────────────────
     { id: "deepseek-v4", name: "DeepSeek V4", contextLength: 64000 },
+    { id: "kimi-k2.7", name: "Kimi K2.7", contextLength: 131000 },
     { id: "kimi-k2.6", name: "Kimi K2.6", contextLength: 131000 },
     { id: "kimi-k2.5", name: "Kimi K2.5", contextLength: 131000 },
+    { id: "glm-5.2", name: "GLM-5.2", contextLength: 128000 },
+    { id: "glm-5.2-max", name: "GLM-5.2 Max", contextLength: 128000 },
     { id: "glm-5.1", name: "GLM-5.1", contextLength: 128000 },
   ],
 };

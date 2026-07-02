@@ -349,7 +349,8 @@ function fixMissingToolResponses(messages) {
 
 // Convert single Claude message - returns single message or array of messages
 function convertClaudeMessage(msg, preserveCacheControl = false) {
-  const role = msg.role === "user" || msg.role === "tool" ? "user" : "assistant";
+  const role =
+    msg.role === "user" || msg.role === "tool" || msg.role === "system" ? "user" : "assistant";
 
   // Simple string content
   if (typeof msg.content === "string") {

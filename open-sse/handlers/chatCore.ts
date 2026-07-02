@@ -2202,11 +2202,16 @@ export async function handleChatCore({
               ? 3
               : provider === "codex"
                 ? 3
-                : 1;
+                : provider === "windsurf"
+                  ? 3
+                  : 1;
 
           // ── Codex 429 account-rotation state ─────────────────────────────────
           // Track excluded connection IDs for codex failover across attempts.
           const codexExcludedIds: string[] = [];
+          // ── Windsurf 5xx account-rotation state ─────────────────────────────
+          // Track excluded connection IDs for windsurf 5xx failover across attempts.
+          const windsurfExcludedIds: string[] = [];
           // Derive session affinity key once for codex failover (used to clear affinity on 429).
           const codexSessionAffinityKey =
             provider === "codex"
@@ -2436,6 +2441,81 @@ export async function handleChatCore({
                 // Update credentials in-place so getExecutionCredentials() picks up the new account
                 Object.assign(credentials, nextCreds);
 
+                releaseAccountSemaphore();
+                attempts++;
+                continue;
+              }
+
+              // Windsurf 5xx account-rotation failover — retry on a different
+              // connection when upstream returns 502/503/504 (intermittent
+              // "third-party model provider is experiencing issues" errors).
+              if (
+                provider === "windsurf" &&
+                res.response.status >= 500 &&
+                res.response.status < 600 &&
+                attempts < maxAttempts - 1
+              ) {
+                const failedConnectionId =
+                  execCreds?.connectionId || credentials?.connectionId || connectionId;
+                log?.warn?.(
+                  "WINDSURF_FAILOVER",
+                  `${res.response.status} on connection ${String(failedConnectionId).slice(0, 8)} (attempt ${attempts + 1}/${maxAttempts}), rotating account`
+                );
+                if (
+                  failedConnectionId &&
+                  !windsurfExcludedIds.includes(String(failedConnectionId))
+                ) {
+                  windsurfExcludedIds.push(String(failedConnectionId));
+                }
+                // Fetch next available windsurf connection (excluding all previously failed ones)
+                const nextCreds = await getProviderCredentials(
+                  "windsurf",
+                  null,
+                  null,
+                  modelToCall || model || requestedModel || null,
+                  {
+                    excludeConnectionIds: [...windsurfExcludedIds],
+                  }
+                ).catch(() => null);
+                if (!nextCreds || nextCreds.allRateLimited) {
+                  log?.warn?.(
+                    "WINDSURF_FAILOVER",
+                    "No more windsurf accounts available — returning error"
+                  );
+                  if (stream) {
+                    releaseAccountSemaphore();
+                    return {
+                      ...res,
+                      _executionCredentials: execCreds,
+                    };
+                  }
+                  return {
+                    ...res,
+                    _accountSemaphoreRelease: releaseAccountSemaphore,
+                    _executionCredentials: execCreds,
+                  };
+                }
+                const newConnectionId = nextCreds.connectionId;
+                log?.info?.(
+                  "WINDSURF_FAILOVER",
+                  `Rotating windsurf account: ${String(failedConnectionId).slice(0, 8)} → ${newConnectionId.slice(0, 8)} (attempt ${attempts + 2}/${maxAttempts})`
+                );
+                logAuditEvent({
+                  action: "windsurf.account_rotation",
+                  actor: apiKeyInfo?.name || "system",
+                  target: newConnectionId,
+                  details: {
+                    failed_connection_id: failedConnectionId,
+                    new_connection_id: newConnectionId,
+                    attempt: attempts + 1,
+                    status: res.response.status,
+                  },
+                });
+                // Update credentials in-place so getExecutionCredentials() picks up the new account
+                Object.assign(credentials, nextCreds);
+                // Cancel the failed response body to avoid leaking the HTTP connection/socket
+                // before retrying on the next account.
+                await res.response.body?.cancel().catch(() => {});
                 releaseAccountSemaphore();
                 attempts++;
                 continue;
