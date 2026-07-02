@@ -679,7 +679,11 @@ function sanitizeJsonSchema(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(sanitizeJsonSchema);
   const obj = node as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  // Keep only structural fields; drop metadata that bloats the payload.
+  // Keep structural fields + validation constraints that affect tool correctness.
+  // Dropping additionalProperties/minimum/maximum/pattern/etc. causes the model
+  // to hallucinate extra fields or generate out-of-range values the tool rejects.
+  // These fields are small (booleans, numbers, short strings) so the size impact
+  // is minimal compared to descriptions and nested properties.
   const KEEP = new Set([
     "type",
     "properties",
@@ -691,9 +695,23 @@ function sanitizeJsonSchema(node: unknown): unknown {
     "allOf",
     "const",
     "description",
+    // Validation constraints — prevent invalid tool arguments
+    "additionalProperties",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "format",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "multipleOf",
   ]);
   for (const [k, v] of Object.entries(obj)) {
-    if (!KEEP.has(k)) continue; // skip $schema, additionalProperties, default, minimum, maximum, title, $ref, etc.
+    if (!KEEP.has(k)) continue; // skip $schema, default, title, $ref, examples, etc.
     if (k === "description") {
       // Keep top-level property descriptions but truncate
       const s = typeof v === "string" ? v : String(v);
@@ -986,7 +1004,13 @@ export class WindsurfExecutor extends BaseExecutor {
           { index: number; started: boolean; hasId: boolean; name: string }
         >();
         let nextToolCallIndex = 0;
-        let lastToolCallKey: string | null = null; // for arguments-only frames
+        let lastToolCallKey: string | null = null; // fallback for arguments-only frames
+        // Map protobuf array position → tool call key. Windsurf's delta_tool_calls
+        // is a repeated field — the array position within each frame implicitly
+        // identifies which tool call a delta belongs to. This lets us route
+        // arguments-only frames (no id, no name) to the correct tool call even
+        // when multiple tool calls are streamed in parallel.
+        const toolCallKeysByPos = new Map<number, string>();
 
         function emit(data: string) {
           controller.enqueue(enc.encode(data));
@@ -1106,7 +1130,8 @@ export class WindsurfExecutor extends BaseExecutor {
             if (hasTools && resp.deltaToolCalls && resp.deltaToolCalls.length > 0) {
               sawToolCalls = true;
               ensureRole();
-              for (const tc of resp.deltaToolCalls) {
+              for (let pos = 0; pos < resp.deltaToolCalls.length; pos++) {
+                const tc = resp.deltaToolCalls[pos];
                 // Determine if this is a new tool call, a continuation, or
                 // an arguments-only partial frame (no id or name).
                 let key: string;
@@ -1123,12 +1148,22 @@ export class WindsurfExecutor extends BaseExecutor {
                   } else {
                     key = tc.name;
                   }
-                } else if (lastToolCallKey) {
-                  // Arguments-only frame — merge into the most recent tool call
-                  key = lastToolCallKey;
                 } else {
-                  // No prior tool call — skip orphan arguments frame
-                  continue;
+                  // Arguments-only frame (no id, no name).
+                  // Try array position first — this correctly routes parallel
+                  // tool call arguments to the right tool call.
+                  const posKey = toolCallKeysByPos.get(pos);
+                  if (posKey) {
+                    key = posKey;
+                  } else if (lastToolCallKey) {
+                    // Fallback: merge into the most recent tool call.
+                    // This is correct for sequential streaming (one tool call
+                    // at a time) but may misroute with parallel tool calls.
+                    key = lastToolCallKey;
+                  } else {
+                    // No prior tool call — skip orphan arguments frame
+                    continue;
+                  }
                 }
 
                 let entry = toolCallMap.get(key);
@@ -1140,6 +1175,9 @@ export class WindsurfExecutor extends BaseExecutor {
                 if (tc.id) entry.hasId = true;
                 // Accumulate name across frames — emit when first non-empty
                 if (tc.name && !entry.name) entry.name = tc.name;
+                // Map this array position → key so future arguments-only frames
+                // at the same position route to the correct tool call.
+                toolCallKeysByPos.set(pos, key);
                 lastToolCallKey = key;
 
                 const isFirst = !entry.started;
