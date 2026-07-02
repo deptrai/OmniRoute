@@ -46,6 +46,8 @@
 
 ### 🔧 Bug Fixes
 
+- **providers (auto/ routing for custom providers):** custom OpenAI-/Anthropic-compatible providers (dynamic `*-compatible-*` connection IDs) are no longer excluded from `auto/` routing — the Auto-Combo virtual factory previously skipped any connection whose provider was absent from the static registry. It now falls back to the connection's `defaultModel`. Regression guard: `tests/unit/auto-custom-provider-5873.test.ts`. ([#5873](https://github.com/diegosouzapw/OmniRoute/issues/5873))
+
 - **middleware (hook sandbox):** operator-authored pre-request hook code now runs inside a hardened Node `vm` sandbox (minimal context, no ambient globals/`process.env`, execution timeout, no `require`) instead of `new Function()` in the main process — closing the Hard Rule #3 / SonarCloud S1523 exposure. Regression guard: `tests/unit/middleware-hook-sandbox-5872.test.ts`. ([#5872](https://github.com/diegosouzapw/OmniRoute/issues/5872))
 
 - **mcp-server (auth forwarding):** the per-caller MCP identity forwarded via `withMcpHttpAuthContext` now wins over the static `OMNIROUTE_API_KEY` env fallback in the internal-fetch helpers (`apiFetch`, `omniRouteFetch`) — previously the env key was spread after the forwarded headers and clobbered the caller's `Authorization`. Regression guard: `open-sse/mcp-server/__tests__/httpAuthContext.test.ts`. ([#5819](https://github.com/diegosouzapw/OmniRoute/issues/5819))
