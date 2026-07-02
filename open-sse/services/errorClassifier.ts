@@ -106,7 +106,6 @@ const CONTENT_POLICY_BLOCK_SIGNALS = [
   "sensitive or unsafe content",
   "content filter",
   "safety filter",
-  "policy violation",
 ];
 export const CONTENT_POLICY_BLOCK_REGEX = new RegExp(CONTENT_POLICY_BLOCK_SIGNALS.join("|"), "i");
 

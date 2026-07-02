@@ -702,11 +702,14 @@ function sanitizeJsonSchema(node: unknown): unknown {
       // IMPORTANT: The keys of "properties" are arbitrary property names
       // (e.g. "expression", "file_path"). We must NOT filter them through KEEP.
       // Instead, recursively sanitize each property's value (its schema).
-      const props: Record<string, unknown> = {};
-      for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
-        props[pk] = sanitizeJsonSchema(pv);
+      // Guard against malformed schemas where properties is null/non-object.
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        const props: Record<string, unknown> = {};
+        for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
+          props[pk] = sanitizeJsonSchema(pv);
+        }
+        out[k] = props;
       }
-      out[k] = props;
     } else {
       out[k] = sanitizeJsonSchema(v);
     }
@@ -955,6 +958,8 @@ export class WindsurfExecutor extends BaseExecutor {
     _stream: boolean,
     hasTools: boolean
   ): Response {
+    // hasTools: when false, skip tool-call field parsing entirely to avoid
+    // false-positive tool call emissions from unrelated protobuf fields.
     const responseId = `chatcmpl-ws-${Date.now()}`;
     const created = Math.floor(Date.now() / 1000);
 
@@ -976,7 +981,10 @@ export class WindsurfExecutor extends BaseExecutor {
         // Additionally, Windsurf sends arguments-only frames (ChatToolCall with
         // only field 3, no id or name) — these must be merged into the most
         // recent tool call.
-        const toolCallMap = new Map<string, { index: number; started: boolean }>();
+        const toolCallMap = new Map<
+          string,
+          { index: number; started: boolean; hasId: boolean; name: string }
+        >();
         let nextToolCallIndex = 0;
         let lastToolCallKey: string | null = null; // for arguments-only frames
 
@@ -1034,9 +1042,16 @@ export class WindsurfExecutor extends BaseExecutor {
               } catch {
                 // not JSON, ignore
               }
-              // Windsurf sometimes puts the error in a "message" field directly
+              // Windsurf sometimes puts the error in a "message" field directly.
+              // Use specific patterns to avoid false-positive "hadError" from
+              // benign messages containing the word "error" (e.g. "no error occurred").
               const msgField = /message:\s*(.+)/i.exec(trailer);
-              if (msgField && /rate limit|error|invalid/i.test(msgField[1])) {
+              if (
+                msgField &&
+                /rate limit|internal error|invalid_request|unauthorized|forbidden|content policy|safety filter/i.test(
+                  msgField[1]
+                )
+              ) {
                 hadError = msgField[1].trim();
                 return;
               }
@@ -1062,7 +1077,10 @@ export class WindsurfExecutor extends BaseExecutor {
 
             // GLM models stream text content via field 9 (delta_thinking)
             // instead of field 3 (delta_text). Emit it as content too.
-            if (resp.deltaThinking) {
+            // Gate to GLM models only — other models use field 9 for actual
+            // reasoning/thinking tokens that should not leak into user-visible content.
+            const isGlmModel = /glm/i.test(model);
+            if (isGlmModel && resp.deltaThinking) {
               totalText += resp.deltaThinking;
               ensureRole();
               emit(
@@ -1085,7 +1103,7 @@ export class WindsurfExecutor extends BaseExecutor {
             // First frame for a tool call: emit id + name + initial args.
             // Subsequent frames: emit same index, only the argument fragment
             // (no id/name) so the translator appends to the existing block.
-            if (resp.deltaToolCalls && resp.deltaToolCalls.length > 0) {
+            if (hasTools && resp.deltaToolCalls && resp.deltaToolCalls.length > 0) {
               sawToolCalls = true;
               ensureRole();
               for (const tc of resp.deltaToolCalls) {
@@ -1095,7 +1113,16 @@ export class WindsurfExecutor extends BaseExecutor {
                 if (tc.id) {
                   key = tc.id;
                 } else if (tc.name) {
-                  key = tc.name;
+                  // If a tool call with this name already exists AND had no id,
+                  // this could be a second call to the same tool — create a
+                  // new entry to avoid merging two distinct tool calls.
+                  const existing = toolCallMap.get(tc.name);
+                  if (existing && !existing.hasId) {
+                    // Second call to same tool without ids — new entry
+                    key = `${tc.name}#${nextToolCallIndex}`;
+                  } else {
+                    key = tc.name;
+                  }
                 } else if (lastToolCallKey) {
                   // Arguments-only frame — merge into the most recent tool call
                   key = lastToolCallKey;
@@ -1106,12 +1133,23 @@ export class WindsurfExecutor extends BaseExecutor {
 
                 let entry = toolCallMap.get(key);
                 if (!entry) {
-                  entry = { index: nextToolCallIndex++, started: false };
+                  entry = { index: nextToolCallIndex++, started: false, hasId: false, name: "" };
                   toolCallMap.set(key, entry);
                 }
+                // Track whether this tool call has a real id (for dedup logic)
+                if (tc.id) entry.hasId = true;
+                // Accumulate name across frames — emit when first non-empty
+                if (tc.name && !entry.name) entry.name = tc.name;
                 lastToolCallKey = key;
 
                 const isFirst = !entry.started;
+                // Only mark started when we have a name (or this is a continuation
+                // of a named tool call). Defer emission if name is still empty
+                // so we don't emit name: "" permanently.
+                if (isFirst && !entry.name && !tc.argumentsJson) {
+                  // First frame with only an id, no name yet — buffer and wait
+                  continue;
+                }
                 entry.started = true;
 
                 const toolCallDelta: Record<string, unknown> = {
@@ -1120,9 +1158,17 @@ export class WindsurfExecutor extends BaseExecutor {
                 };
 
                 if (isFirst) {
-                  // First frame: include id + name so the translator creates
+                  // First emitted frame: include id + name so the translator creates
                   // a single content_block_start for this tool call.
                   toolCallDelta.id = tc.id || `call-${Date.now()}-${entry.index}`;
+                  toolCallDelta.function = {
+                    name: entry.name || tc.name || "",
+                    arguments: tc.argumentsJson || "",
+                  };
+                } else if (tc.name && !isFirst) {
+                  // Name arrived in a later frame — emit it as a correction.
+                  // The translator will update the tool call name.
+                  toolCallDelta.id = tc.id || toolCallDelta.id;
                   toolCallDelta.function = {
                     name: tc.name,
                     arguments: tc.argumentsJson || "",
@@ -1197,6 +1243,9 @@ export class WindsurfExecutor extends BaseExecutor {
             // If we already streamed partial text, emit a normal finish_reason="stop"
             // so the client treats this as a complete (truncated) response rather than
             // retrying and accumulating duplicate partial outputs (#b655de7b).
+            // For tool calls, use "stop" (not "tool_calls") because the arguments
+            // may be truncated mid-JSON — "tool_calls" signals the client to
+            // parse and execute, which would fail on incomplete JSON.
             if (roleEmitted && (totalText || sawToolCalls)) {
               emit(
                 `data: ${JSON.stringify({
@@ -1204,9 +1253,7 @@ export class WindsurfExecutor extends BaseExecutor {
                   object: "chat.completion.chunk",
                   created,
                   model,
-                  choices: [
-                    { index: 0, delta: {}, finish_reason: sawToolCalls ? "tool_calls" : "stop" },
-                  ],
+                  choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
                 })}\n\n`
               );
               emit("data: [DONE]\n\n");
