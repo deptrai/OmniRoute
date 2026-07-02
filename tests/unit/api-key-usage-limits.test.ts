@@ -231,6 +231,27 @@ test("getApiKeyUsageLimitStatus cuts weekly USD spend at observed provider quota
     null,
     "2026-06-20T02:10:00.000Z"
   );
+  db.prepare(
+    `
+    INSERT INTO provider_quota_reset_events
+      (provider, connection_id, window_key, window_started_at, window_resets_at,
+       observed_at, previous_remaining_percentage, new_remaining_percentage,
+       previous_used_percentage, new_used_percentage, raw_data)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `
+  ).run(
+    "claude",
+    "conn-claude",
+    "weekly (7d)",
+    "2026-06-18T23:00:00.000Z",
+    "2026-06-25T23:00:00.000Z",
+    "2026-06-18T23:04:00.000Z",
+    0,
+    100,
+    100,
+    0,
+    null
+  );
 
   const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
   assert.ok(metadata);

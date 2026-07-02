@@ -2,7 +2,7 @@ import { getCostSummary } from "@/domain/costRules";
 import { getApiKeys } from "@/lib/db/apiKeys";
 import { getDbInstance } from "@/lib/db/core";
 import { getAllProviderLimitsCache, getProviderLimitsCache } from "@/lib/db/providerLimits";
-import { getProviderQuotaWindowStartIso } from "@/lib/db/quotaResetEvents";
+import { getProviderQuotaWindowStart } from "@/lib/db/quotaResetEvents";
 import { calculateCost } from "@/lib/usage/costCalculator";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -69,7 +69,11 @@ export interface ProviderWindowCostBreakdown {
   windowStartAt: string;
   windowResetAt: string | null;
   windowSource: "provider_weekly_reset" | "fallback_rolling_7d";
-  windowStartSource: "recorded_reset_event" | "inferred_from_reset_at" | "fallback_rolling_7d";
+  windowStartSource:
+    | "recorded_reset_event"
+    | "observed_snapshot_reset"
+    | "inferred_from_reset_at"
+    | "fallback_rolling_7d";
   quotaName: string | null;
   quotaUsedPercent: number | null;
   quotaRemainingPercent: number | null;
@@ -111,19 +115,19 @@ function parseResetAt(value: unknown, nowMs: number): number | null {
   return parsed;
 }
 
-function getRecordedWindowStartMs(
+function getProviderWindowStart(
   connectionId: string | null,
   resetMs: number,
   nowMs: number
-): number | null {
+): { startMs: number; source: ProviderWindowCostBreakdown["windowStartSource"] } | null {
   if (!connectionId) return null;
   const resetIso = new Date(resetMs).toISOString();
-  const startIso = getProviderQuotaWindowStartIso(connectionId, resetIso, nowMs);
-  if (!startIso) return null;
-  const startMs = Date.parse(startIso);
+  const start = getProviderQuotaWindowStart(connectionId, resetIso, nowMs);
+  if (!start) return null;
+  const startMs = Date.parse(start.windowStartIso);
   if (!Number.isFinite(startMs)) return null;
   if (startMs > nowMs || startMs >= resetMs) return null;
-  return startMs;
+  return { startMs, source: start.source };
 }
 
 function getRemainingPercent(quota: JsonRecord): number | null {
@@ -212,16 +216,16 @@ function selectWeeklyWindow(
   }
 
   if (selected) {
-    const recordedStartMs = getRecordedWindowStartMs(
+    const providerWindowStart = getProviderWindowStart(
       selected.connectionId,
       selected.resetMs,
       nowMs
     );
     return {
-      startMs: recordedStartMs ?? selected.resetMs - WEEK_MS,
+      startMs: providerWindowStart?.startMs ?? selected.resetMs - WEEK_MS,
       resetMs: selected.resetMs,
       source: "provider_weekly_reset",
-      windowStartSource: recordedStartMs ? "recorded_reset_event" : "inferred_from_reset_at",
+      windowStartSource: providerWindowStart?.source ?? "inferred_from_reset_at",
       quotaName: selected.quotaName,
       quotaUsedPercent: selected.quotaUsedPercent,
       quotaRemainingPercent: selected.quotaRemainingPercent,
