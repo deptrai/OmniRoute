@@ -318,6 +318,8 @@ export function isKnownNonClaudeStreamPayload(
 
 // Check if chunk has valuable content (not empty)
 export function hasValuableContent(chunk: Record<string, unknown>, format: string): boolean {
+  // Guard against null/undefined chunks (e.g. from JSON.parse(null) or error responses)
+  if (!chunk || typeof chunk !== "object") return false;
   // OpenAI format
   if (format === FORMATS.OPENAI) {
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];

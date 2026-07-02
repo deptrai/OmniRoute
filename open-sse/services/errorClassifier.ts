@@ -76,6 +76,7 @@ export const PROVIDER_ERROR_TYPES = {
   CONTEXT_OVERFLOW: "context_overflow",
   OAUTH_INVALID_TOKEN: "oauth_invalid_token",
   EMPTY_CONTENT: "empty_content",
+  CONTENT_POLICY_BLOCK: "content_policy_block",
 };
 
 export const CONTEXT_OVERFLOW_SIGNALS = [
@@ -93,6 +94,21 @@ export const CONTEXT_OVERFLOW_SIGNALS = [
 ];
 
 export const CONTEXT_OVERFLOW_REGEX = new RegExp(CONTEXT_OVERFLOW_SIGNALS.join("|"), "i");
+
+// Content policy blocks: upstream rejects the payload as unsafe/sensitive.
+// These are deterministic — the same payload will be blocked on every account,
+// so account rotation/failover is pointless and only wastes time + burns accounts.
+const CONTENT_POLICY_BLOCK_SIGNALS = [
+  "blocked by our content policy",
+  "blocked by content policy",
+  "content policy violation",
+  "content_policy_violation",
+  "sensitive or unsafe content",
+  "content filter",
+  "safety filter",
+  "policy violation",
+];
+export const CONTENT_POLICY_BLOCK_REGEX = new RegExp(CONTENT_POLICY_BLOCK_SIGNALS.join("|"), "i");
 
 export function isContextOverflow(errorText: string): boolean {
   return CONTEXT_OVERFLOW_REGEX.test(String(errorText || ""));
@@ -165,6 +181,12 @@ export function classifyProviderError(
       return null;
     }
     return PROVIDER_ERROR_TYPES.FORBIDDEN;
+  }
+  // Content policy blocks are deterministic — the same payload will be blocked
+  // on every account, so account rotation is pointless. Detect before the
+  // generic 5xx SERVER_ERROR classification so callers can short-circuit.
+  if (statusCode >= 400 && CONTENT_POLICY_BLOCK_REGEX.test(bodyStr)) {
+    return PROVIDER_ERROR_TYPES.CONTENT_POLICY_BLOCK;
   }
   if (statusCode >= 500) return PROVIDER_ERROR_TYPES.SERVER_ERROR;
 

@@ -73,7 +73,7 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
     }
   }
 
-  if (!chunk.choices?.length) {
+  if (!chunk || !chunk.choices?.length) {
     return [];
   }
 

@@ -140,6 +140,7 @@ import {
   classifyProviderError,
   PROVIDER_ERROR_TYPES,
   isEmptyContentResponse,
+  CONTENT_POLICY_BLOCK_REGEX,
 } from "../services/errorClassifier.ts";
 import { updateProviderConnection, getProviderConnectionById } from "@/lib/db/providers";
 import { wasRefreshTokenRotated } from "@omniroute/open-sse/services/refreshSerializer.ts";
@@ -2449,76 +2450,91 @@ export async function handleChatCore({
               // Windsurf 5xx account-rotation failover — retry on a different
               // connection when upstream returns 502/503/504 (intermittent
               // "third-party model provider is experiencing issues" errors).
+              // Content policy blocks are excluded: they are deterministic, so
+              // rotating accounts only wastes time and burns fallback accounts.
               if (
                 provider === "windsurf" &&
                 res.response.status >= 500 &&
                 res.response.status < 600 &&
                 attempts < maxAttempts - 1
               ) {
-                const failedConnectionId =
-                  execCreds?.connectionId || credentials?.connectionId || connectionId;
-                log?.warn?.(
-                  "WINDSURF_FAILOVER",
-                  `${res.response.status} on connection ${String(failedConnectionId).slice(0, 8)} (attempt ${attempts + 1}/${maxAttempts}), rotating account`
-                );
-                if (
-                  failedConnectionId &&
-                  !windsurfExcludedIds.includes(String(failedConnectionId))
-                ) {
-                  windsurfExcludedIds.push(String(failedConnectionId));
-                }
-                // Fetch next available windsurf connection (excluding all previously failed ones)
-                const nextCreds = await getProviderCredentials(
-                  "windsurf",
-                  null,
-                  null,
-                  modelToCall || model || requestedModel || null,
-                  {
-                    excludeConnectionIds: [...windsurfExcludedIds],
-                  }
-                ).catch(() => null);
-                if (!nextCreds || nextCreds.allRateLimited) {
+                // Peek at the error body to detect content policy blocks.
+                const bodyPeek = await res.response
+                  .clone()
+                  .text()
+                  .catch(() => "");
+                if (CONTENT_POLICY_BLOCK_REGEX.test(bodyPeek)) {
                   log?.warn?.(
                     "WINDSURF_FAILOVER",
-                    "No more windsurf accounts available — returning error"
+                    `${res.response.status} content policy block on connection ${String(execCreds?.connectionId || credentials?.connectionId || connectionId).slice(0, 8)} — NOT rotating (deterministic error)`
                   );
-                  if (stream) {
-                    releaseAccountSemaphore();
+                  // Fall through to the normal error path — no account rotation.
+                } else {
+                  const failedConnectionId =
+                    execCreds?.connectionId || credentials?.connectionId || connectionId;
+                  log?.warn?.(
+                    "WINDSURF_FAILOVER",
+                    `${res.response.status} on connection ${String(failedConnectionId).slice(0, 8)} (attempt ${attempts + 1}/${maxAttempts}), rotating account`
+                  );
+                  if (
+                    failedConnectionId &&
+                    !windsurfExcludedIds.includes(String(failedConnectionId))
+                  ) {
+                    windsurfExcludedIds.push(String(failedConnectionId));
+                  }
+                  // Fetch next available windsurf connection (excluding all previously failed ones)
+                  const nextCreds = await getProviderCredentials(
+                    "windsurf",
+                    null,
+                    null,
+                    modelToCall || model || requestedModel || null,
+                    {
+                      excludeConnectionIds: [...windsurfExcludedIds],
+                    }
+                  ).catch(() => null);
+                  if (!nextCreds || nextCreds.allRateLimited) {
+                    log?.warn?.(
+                      "WINDSURF_FAILOVER",
+                      "No more windsurf accounts available — returning error"
+                    );
+                    if (stream) {
+                      releaseAccountSemaphore();
+                      return {
+                        ...res,
+                        _executionCredentials: execCreds,
+                      };
+                    }
                     return {
                       ...res,
+                      _accountSemaphoreRelease: releaseAccountSemaphore,
                       _executionCredentials: execCreds,
                     };
                   }
-                  return {
-                    ...res,
-                    _accountSemaphoreRelease: releaseAccountSemaphore,
-                    _executionCredentials: execCreds,
-                  };
-                }
-                const newConnectionId = nextCreds.connectionId;
-                log?.info?.(
-                  "WINDSURF_FAILOVER",
-                  `Rotating windsurf account: ${String(failedConnectionId).slice(0, 8)} → ${newConnectionId.slice(0, 8)} (attempt ${attempts + 2}/${maxAttempts})`
-                );
-                logAuditEvent({
-                  action: "windsurf.account_rotation",
-                  actor: apiKeyInfo?.name || "system",
-                  target: newConnectionId,
-                  details: {
-                    failed_connection_id: failedConnectionId,
-                    new_connection_id: newConnectionId,
-                    attempt: attempts + 1,
-                    status: res.response.status,
-                  },
-                });
-                // Update credentials in-place so getExecutionCredentials() picks up the new account
-                Object.assign(credentials, nextCreds);
-                // Cancel the failed response body to avoid leaking the HTTP connection/socket
-                // before retrying on the next account.
-                await res.response.body?.cancel().catch(() => {});
-                releaseAccountSemaphore();
-                attempts++;
-                continue;
+                  const newConnectionId = nextCreds.connectionId;
+                  log?.info?.(
+                    "WINDSURF_FAILOVER",
+                    `Rotating windsurf account: ${String(failedConnectionId).slice(0, 8)} → ${newConnectionId.slice(0, 8)} (attempt ${attempts + 2}/${maxAttempts})`
+                  );
+                  logAuditEvent({
+                    action: "windsurf.account_rotation",
+                    actor: apiKeyInfo?.name || "system",
+                    target: newConnectionId,
+                    details: {
+                      failed_connection_id: failedConnectionId,
+                      new_connection_id: newConnectionId,
+                      attempt: attempts + 1,
+                      status: res.response.status,
+                    },
+                  });
+                  // Update credentials in-place so getExecutionCredentials() picks up the new account
+                  Object.assign(credentials, nextCreds);
+                  // Cancel the failed response body to avoid leaking the HTTP connection/socket
+                  // before retrying on the next account.
+                  await res.response.body?.cancel().catch(() => {});
+                  releaseAccountSemaphore();
+                  attempts++;
+                  continue;
+                } // end else (not content policy block)
               }
 
               // For streaming: release the semaphore when the client drains or cancels the stream.
@@ -3297,6 +3313,19 @@ export async function handleChatCore({
           });
           console.warn(
             `[provider] Node ${errorConnectionId} project routing error (${statusCode}) — not banning`
+          );
+        } else if (errorType === PROVIDER_ERROR_TYPES.CONTENT_POLICY_BLOCK) {
+          // Content policy blocks are per-request, not per-account — the account
+          // is healthy, just this specific payload was rejected. Keep the account
+          // active and record the error for observability.
+          await updateProviderConnection(errorConnectionId, {
+            lastErrorType: errorType,
+            lastError: message,
+            errorCode: statusCode,
+          });
+          log?.warn?.(
+            "CONTENT_POLICY",
+            `Node ${errorConnectionId.slice(0, 8)} content policy block (${statusCode}) — account stays active, returning error to client`
           );
         }
       } catch {
