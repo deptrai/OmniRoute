@@ -37,6 +37,7 @@ import {
 import {
   buildStreamingResponseHeaders,
   materializeDeduplicatedExecutionResult,
+  stripNextMiddlewareControlHeaders,
   stripStaleForwardingHeaders,
 } from "./chatCore/responseHeaders.ts";
 import {
@@ -2618,6 +2619,7 @@ export async function handleChatCore({
         const headersObj = normalizeHeaders(rawResult.response.headers);
         const responseHeaders = new Headers(headersObj);
         stripStaleForwardingHeaders(responseHeaders);
+        stripNextMiddlewareControlHeaders(responseHeaders);
         const contentType = (responseHeaders.get("content-type") || "").toLowerCase();
         const payload = await readNonStreamingResponseBody(
           rawResult.response,

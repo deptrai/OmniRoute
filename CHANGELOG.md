@@ -46,6 +46,8 @@
 
 ### 🔧 Bug Fixes
 
+- **api (proxy header hygiene):** upstream `x-middleware-*` control headers (emitted by providers hosted behind Next.js, e.g. synthetic.new) are now stripped from proxied responses instead of forwarded verbatim — forwarding `x-middleware-rewrite` made Next 16 throw `NextResponse.rewrite() was used in a app route handler` and return 500 despite a successful upstream call. Applies to both streaming and JSON paths. Regression guard: `tests/unit/middleware-header-strip-5849.test.ts`. ([#5849](https://github.com/diegosouzapw/OmniRoute/issues/5849))
+
 - **docs (pnpm global install):** replaced the unsupported `pnpm approve-builds -g` step with the install-time `pnpm add -g omniroute@latest --allow-build=better-sqlite3` flag across README + Setup Guide (and i18n mirrors), fixing native-build approval for pnpm v11 global installs. ([#5554](https://github.com/diegosouzapw/OmniRoute/issues/5554))
 
 - **dashboard (token badge):** the red "Token Expired" connection badge no longer flashes for OAuth refresh-capable providers (Antigravity/Gemini) whose access token merely lapsed but is auto-refreshed — it now shows only when the connection is terminally expired (`testStatus === "expired"`). Continuation of #5326. Regression guard: `tests/unit/ui/connection-row-token-badge-5836.test.tsx`. ([#5836](https://github.com/diegosouzapw/OmniRoute/issues/5836))
