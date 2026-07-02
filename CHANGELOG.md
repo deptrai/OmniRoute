@@ -4,6 +4,8 @@
 
 ### 🔧 Bug Fixes
 
+- **fix(github):** keep Copilot access-token sessions active. GitHub Copilot device-flow accounts can hold a GitHub access token plus a short-lived Copilot token **without** a refresh token; the proactive health check treated that as terminal `no_refresh_token` and marked the connection expired minutes after login. The health check now keeps those sessions active, clears stale `no_refresh_token` state, and refreshes the Copilot sub-token when needed. Regression guard: `tests/unit/token-health-no-refresh-token-expired-5326.test.ts`. Extracted from [#5863](https://github.com/diegosouzapw/OmniRoute/pull/5863) by [@Witroch4](https://github.com/Witroch4).
+
 - **fix(kiro):** bound the Claude model-id dash→dot normalization to a 1–2 digit minor so date-suffixed ids (e.g. claude-opus-4-20250514) are no longer corrupted. (thanks @voravitl)
 
 - **fix(usage):** preserve (bounded) tool definitions in request logs even when the request body is truncated, so the request-details view can still show available tools. (thanks @noir017)
