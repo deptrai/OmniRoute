@@ -657,14 +657,21 @@ type OpenAITool = {
 };
 
 // Windsurf's GetChatMessage API rejects tool payloads larger than ~57KB with a
-// 502 "internal error". Claude Code sends 28 tools with verbose descriptions
-// and full JSON Schema metadata (~87KB). To stay under the limit we sanitize
-// each tool: truncate the description and strip non-essential JSON Schema fields
-// ($schema, additionalProperties, default, minimum, maximum, property-level
-// descriptions) while preserving the structural fields the model needs to call
-// the tool correctly (type, properties, required, enum).
+// 502 "internal error". Claude Code with MCP servers can send 300+ tools (~150KB).
+// To fit as many tools as possible under the limit we use progressive stripping:
+//   Tier 1 (budget > 30KB): full sanitized schema + 200-char description
+//   Tier 2 (budget > 10KB): stripped schema {"type":"object"} + 120-char description
+//   Tier 3 (budget > 2KB):  name only, no schema, 60-char description
+//   Beyond:                 tools are dropped (logged as warning)
+// This preserves tool discoverability (model knows the tool exists) even when
+// full parameter structure can't be sent. The model can still call the tool with
+// best-guess arguments, which is far better than not knowing the tool exists.
 const WS_MAX_TOOL_DESC_LEN = 200;
-const WS_TOOLS_SIZE_BUDGET = 50000; // conservative limit under the ~57KB threshold
+const WS_TOOLS_SIZE_BUDGET = 52000; // under the ~57KB hard limit
+const WS_TIER2_THRESHOLD = 30000; // switch to stripped schema when remaining budget drops below this
+const WS_TIER3_THRESHOLD = 10000; // switch to name-only when remaining budget drops below this
+const WS_TIER2_DESC_LEN = 120;
+const WS_TIER3_DESC_LEN = 60;
 
 /** Recursively strip non-essential JSON Schema fields to reduce payload size. */
 function sanitizeJsonSchema(node: unknown): unknown {
@@ -710,30 +717,67 @@ function sanitizeJsonSchema(node: unknown): unknown {
 function openaiToolsToWs(tools: unknown): WsToolDefinition[] | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
   const out: WsToolDefinition[] = [];
+  const keptNames = new Set<string>();
   let totalSize = 0;
+  let tier1Count = 0,
+    tier2Count = 0,
+    tier3Count = 0;
   for (const t of tools as OpenAITool[]) {
     if (!t?.function?.name) continue;
+    const name = t.function.name;
     const rawDesc = typeof t.function.description === "string" ? t.function.description : "";
-    const desc =
-      rawDesc.length > WS_MAX_TOOL_DESC_LEN
-        ? rawDesc.slice(0, WS_MAX_TOOL_DESC_LEN) + "…"
-        : rawDesc;
-    let schemaStr = "{}";
-    try {
-      const sanitized = sanitizeJsonSchema(t.function.parameters);
-      schemaStr = t.function.parameters ? JSON.stringify(sanitized) : "{}";
-    } catch {
+
+    // Progressive stripping based on remaining budget
+    const remaining = WS_TOOLS_SIZE_BUDGET - totalSize;
+    let desc: string;
+    let schemaStr: string;
+
+    if (remaining > WS_TIER2_THRESHOLD) {
+      // Tier 1: full sanitized schema + full description
+      tier1Count++;
+      desc =
+        rawDesc.length > WS_MAX_TOOL_DESC_LEN
+          ? rawDesc.slice(0, WS_MAX_TOOL_DESC_LEN) + "…"
+          : rawDesc;
+      try {
+        const sanitized = sanitizeJsonSchema(t.function.parameters);
+        schemaStr = t.function.parameters ? JSON.stringify(sanitized) : "{}";
+      } catch {
+        schemaStr = "{}";
+      }
+    } else if (remaining > WS_TIER3_THRESHOLD) {
+      // Tier 2: stripped schema (type only) + shorter description
+      tier2Count++;
+      desc =
+        rawDesc.length > WS_TIER2_DESC_LEN ? rawDesc.slice(0, WS_TIER2_DESC_LEN) + "…" : rawDesc;
+      schemaStr = '{"type":"object"}';
+    } else {
+      // Tier 3: name only, minimal schema, very short description
+      tier3Count++;
+      desc =
+        rawDesc.length > WS_TIER3_DESC_LEN ? rawDesc.slice(0, WS_TIER3_DESC_LEN) + "…" : rawDesc;
       schemaStr = "{}";
     }
-    // Check budget — if adding this tool would exceed the limit, stop adding more.
-    const entrySize = desc.length + schemaStr.length + (t.function.name?.length || 0);
-    if (totalSize + entrySize > WS_TOOLS_SIZE_BUDGET) break;
+
+    const entrySize = desc.length + schemaStr.length + name.length;
+    if (totalSize + entrySize > WS_TOOLS_SIZE_BUDGET) {
+      // Budget exhausted — log dropped tools and stop
+      const droppedNames = (tools as OpenAITool[])
+        .slice(out.length)
+        .map((tt) => tt?.function?.name)
+        .filter(Boolean) as string[];
+      if (droppedNames.length > 0) {
+        console.warn(
+          `[WINDSURF_TOOLS] Dropped ${droppedNames.length} tools (budget exhausted at ${totalSize}/${WS_TOOLS_SIZE_BUDGET}). ` +
+            `Kept ${out.length}/${tools.length} (tier1=${tier1Count}, tier2=${tier2Count}, tier3=${tier3Count}). ` +
+            `Dropped (first 10): ${droppedNames.slice(0, 10).join(", ")}`
+        );
+      }
+      break;
+    }
     totalSize += entrySize;
-    out.push({
-      name: t.function.name,
-      description: desc,
-      jsonSchemaString: schemaStr,
-    });
+    keptNames.add(name);
+    out.push({ name, description: desc, jsonSchemaString: schemaStr });
   }
   return out.length > 0 ? out : undefined;
 }
@@ -828,8 +872,21 @@ export class WindsurfExecutor extends BaseExecutor {
     // ChatMessagePrompt (field 6). Convert OpenAI tools/tool_choice to the
     // Windsurf protobuf format so models like GLM-5.2 can emit native tool_calls.
     const wsTools = openaiToolsToWs(b.tools);
-    const wsToolChoice = openaiToolChoiceToWs(b.tool_choice);
+    let wsToolChoice = openaiToolChoiceToWs(b.tool_choice);
     const hasTools = wsTools !== undefined && wsTools.length > 0;
+
+    // Cross-validate toolChoice: if a specific tool is forced but was dropped
+    // by the budget, clear the toolChoice to avoid Windsurf 400/502 for a
+    // non-existent tool definition.
+    if (wsToolChoice?.toolName && wsTools) {
+      const keptToolNames = new Set(wsTools.map((t) => t.name));
+      if (!keptToolNames.has(wsToolChoice.toolName)) {
+        console.warn(
+          `[WINDSURF_TOOLS] toolChoice "${wsToolChoice.toolName}" was dropped by budget — clearing toolChoice to avoid upstream error`
+        );
+        wsToolChoice = undefined;
+      }
+    }
 
     const wsMessages = openAIMessagesToWs(rawMessages);
 
