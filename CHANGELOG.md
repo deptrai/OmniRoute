@@ -46,6 +46,7 @@
 
 ### 🔧 Bug Fixes
 
+- **providers (codex image auto-routing regression):** an unprefixed `gpt-5.5` request from a codex-only setup (no OpenAI connection) now correctly infers the `codex` provider again — the OpenAI static-catalog short-circuit in `resolveModelByProviderInference` was preempting the codex-preference block, so `gpt-5.5` (added to the OpenAI catalog) stopped auto-routing to Codex image generation. Users with an active OpenAI connection are unaffected (OpenAI stays default). Regression guard: `tests/unit/codex-gpt55-routing-5887.test.ts`. ([#5887](https://github.com/diegosouzapw/OmniRoute/issues/5887))
 - **api (proxy header hygiene):** upstream `x-middleware-*` control headers (emitted by providers hosted behind Next.js, e.g. synthetic.new) are now stripped from proxied responses instead of forwarded verbatim — forwarding `x-middleware-rewrite` made Next 16 throw `NextResponse.rewrite() was used in a app route handler` and return 500 despite a successful upstream call. Applies to both streaming and JSON paths. Regression guard: `tests/unit/middleware-header-strip-5849.test.ts`. ([#5849](https://github.com/diegosouzapw/OmniRoute/issues/5849))
 
 - **docs (pnpm global install):** replaced the unsupported `pnpm approve-builds -g` step with the install-time `pnpm add -g omniroute@latest --allow-build=better-sqlite3` flag across README + Setup Guide (and i18n mirrors), fixing native-build approval for pnpm v11 global installs. ([#5554](https://github.com/diegosouzapw/OmniRoute/issues/5554))
