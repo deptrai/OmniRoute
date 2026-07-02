@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### ✨ New Features
+
+- **usage (quota percentages + provider USD drilldown):** `@@om-usage` and the HTTP usage endpoint now report personal API-key quotas as **remaining percentages** (USD amounts stay out of the command output), provider quota remaining is scaled by the configured quota cutoff so the protected reserve reads as 0% left, and the quota dashboard regains a **provider USD cost drilldown** (`/api/usage/provider-window-costs` + `ProviderUsdCostModal`, management-auth gated). Also honors **observed provider quota resets**: a same-`resetAt` reset (usage dropping back to the reset floor) is detected and preferred over stale recorded weekly events for provider USD windows and API-key USD quotas. New `src/lib/usage/providerWindowCosts.ts`. Regression guards: `tests/unit/provider-window-costs.test.ts`, `tests/unit/internal-usage-command.test.ts`, `tests/unit/api-key-usage-limits.test.ts`, `tests/unit/lib/quota-reset-events.test.ts`. Extracted from [#5863](https://github.com/diegosouzapw/OmniRoute/pull/5863) by [@Witroch4](https://github.com/Witroch4).
+
 ### 🔧 Bug Fixes
 
 - **fix(kiro):** bound the Claude model-id dash→dot normalization to a 1–2 digit minor so date-suffixed ids (e.g. claude-opus-4-20250514) are no longer corrupted. (thanks @voravitl)
