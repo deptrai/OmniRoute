@@ -86,11 +86,41 @@ test("handshake response includes null publicUrl when NEXT_PUBLIC_LIVE_WS_PUBLIC
   assert.equal(body.live.publicUrl, null);
 });
 
-test("WS_PROTOCOL.live includes publicUrl field", async () => {
+test("protocol.live.publicUrl reflects env set after module import (lazy read)", async () => {
   process.env.NEXT_PUBLIC_LIVE_WS_PUBLIC_URL = "wss://custom.example.com/ws";
 
   const response = await wsRoute.GET(new Request("http://localhost/api/v1/ws"));
 
+  assert.equal(response.status, 426);
   const body = (await response.json()) as any;
   assert.equal(body.protocol.live.publicUrl, "wss://custom.example.com/ws");
+});
+
+test("publicUrl with non-WebSocket scheme is rejected (null)", async () => {
+  process.env.NEXT_PUBLIC_LIVE_WS_PUBLIC_URL = "https://ws.my-ai.com/live-ws";
+
+  const response = await wsRoute.GET(
+    new Request("http://localhost/api/v1/ws?handshake=1", {
+      headers: { origin: "http://localhost" },
+    })
+  );
+
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as any;
+  assert.equal(body.live.publicUrl, null);
+  assert.equal(body.protocol.live.publicUrl, null);
+});
+
+test("publicUrl with ws:// scheme is accepted", async () => {
+  process.env.NEXT_PUBLIC_LIVE_WS_PUBLIC_URL = "ws://lan-host:20129/live-ws";
+
+  const response = await wsRoute.GET(
+    new Request("http://localhost/api/v1/ws?handshake=1", {
+      headers: { origin: "http://localhost" },
+    })
+  );
+
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as any;
+  assert.equal(body.live.publicUrl, "ws://lan-host:20129/live-ws");
 });
