@@ -46,6 +46,8 @@
 
 ### 🔧 Bug Fixes
 
+- **middleware (hook sandbox):** operator-authored pre-request hook code now runs inside a hardened Node `vm` sandbox (minimal context, no ambient globals/`process.env`, execution timeout, no `require`) instead of `new Function()` in the main process — closing the Hard Rule #3 / SonarCloud S1523 exposure. Regression guard: `tests/unit/middleware-hook-sandbox-5872.test.ts`. ([#5872](https://github.com/diegosouzapw/OmniRoute/issues/5872))
+
 - **mcp-server (auth forwarding):** the per-caller MCP identity forwarded via `withMcpHttpAuthContext` now wins over the static `OMNIROUTE_API_KEY` env fallback in the internal-fetch helpers (`apiFetch`, `omniRouteFetch`) — previously the env key was spread after the forwarded headers and clobbered the caller's `Authorization`. Regression guard: `open-sse/mcp-server/__tests__/httpAuthContext.test.ts`. ([#5819](https://github.com/diegosouzapw/OmniRoute/issues/5819))
 
 - **dashboard (Modal provider — two-field auth):** the Modal provider connection form now exposes **two fields — Token ID + Token Secret —** instead of a single API-key input, since Modal authenticates with `Authorization: Bearer <token-id>:<token-secret>`. The dashboard combines the two fields into the `id:secret` credential before saving (`combineModalCredential`, trims both parts), while a value pasted in the legacy single-field format keeps working verbatim (empty secret → passthrough), so existing saved connections need no migration; the key-help link points at Modal's token settings. Regression guard: `tests/unit/modal-credential-combine.test.ts` (5). ([#5881](https://github.com/diegosouzapw/OmniRoute/pull/5881), closes [#5446](https://github.com/diegosouzapw/OmniRoute/issues/5446))
