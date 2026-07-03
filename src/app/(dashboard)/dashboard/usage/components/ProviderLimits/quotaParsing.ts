@@ -42,6 +42,7 @@ function normalizeQuotaEntry(name: string, quota: any = {}, extras: any = {}) {
     total: adjusted.total,
     resetAt: quota?.resetAt || null,
     staleAfterReset: adjusted.staleAfterReset,
+    unlimited: Boolean(quota?.unlimited),
     ...(adjusted.remainingPercentage !== undefined
       ? { remainingPercentage: adjusted.remainingPercentage }
       : {}),
