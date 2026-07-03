@@ -43,6 +43,7 @@ interface ProviderConnectionLike {
   provider: string;
   authType?: string;
   accessToken?: string;
+  apiKey?: string;
   refreshToken?: string;
   expiresAt?: string;
   tokenExpiresAt?: string;
@@ -74,6 +75,7 @@ const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
   "vertex",
   "vertex-partner",
   "kimi-coding-apikey",
+  "windsurf",
 ]);
 const DEFAULT_PROVIDER_LIMITS_SYNC_INTERVAL_MINUTES = 70;
 const PROVIDER_LIMITS_AUTO_SYNC_SETTING_KEY = "provider_limits_auto_sync_last_run";
@@ -268,7 +270,7 @@ export async function refreshAndUpdateCredentials(
     // hard-failing. Previously this was qualified to `provider === "github"`,
     // which left every other provider stuck on a transient refresh failure even
     // when a usable access token was still on hand.
-    if (connection.accessToken) {
+    if (connection.accessToken || connection.apiKey) {
       return { connection, refreshed: false };
     }
     throw withStatus(

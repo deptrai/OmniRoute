@@ -90,9 +90,13 @@ export async function getWindsurfUsage(apiKey: string): Promise<{
 
     // ── Daily quota (rolling 24h window) ────────────────────────────────────
     // dailyQuotaRemainingPercent: 0-100, directly from API.
+    // When the field is absent (e.g. quota exhausted and API omits it), default to 0.
     // dailyQuotaResetAtUnix: Unix seconds → convert to ms for parseResetTime.
-    const dailyRemainingPercent = toNumber(planStatus.dailyQuotaRemainingPercent, -1);
-    if (dailyRemainingPercent >= 0) {
+    // Note: reset timestamps are always present even when quota is exhausted.
+    const hasDaily =
+      "dailyQuotaRemainingPercent" in planStatus || "dailyQuotaResetAtUnix" in planStatus;
+    if (hasDaily) {
+      const dailyRemainingPercent = toNumber(planStatus.dailyQuotaRemainingPercent, 0);
       const dailyResetUnix = toNumber(planStatus.dailyQuotaResetAtUnix, 0);
       quotas.daily = {
         used: 100 - dailyRemainingPercent,
@@ -107,9 +111,13 @@ export async function getWindsurfUsage(apiKey: string): Promise<{
 
     // ── Weekly quota (rolling 7d window) ───────────────────────────────────
     // weeklyQuotaRemainingPercent: 0-100, directly from API.
+    // When the field is absent (e.g. weekly quota exhausted and API omits it),
+    // default to 0 — the user has used up their weekly allowance.
     // weeklyQuotaResetAtUnix: Unix seconds → convert to ms for parseResetTime.
-    const weeklyRemainingPercent = toNumber(planStatus.weeklyQuotaRemainingPercent, -1);
-    if (weeklyRemainingPercent >= 0) {
+    const hasWeekly =
+      "weeklyQuotaRemainingPercent" in planStatus || "weeklyQuotaResetAtUnix" in planStatus;
+    if (hasWeekly) {
+      const weeklyRemainingPercent = toNumber(planStatus.weeklyQuotaRemainingPercent, 0);
       const weeklyResetUnix = toNumber(planStatus.weeklyQuotaResetAtUnix, 0);
       quotas.weekly = {
         used: 100 - weeklyRemainingPercent,
