@@ -2,21 +2,24 @@
  * usage/windsurf.ts — Windsurf (Codeium) usage fetcher.
  *
  * Calls the Codeium cloud SeatManagementService/GetUserStatus Connect-RPC endpoint
- * to retrieve plan info and credit-based usage for the current billing cycle.
+ * to retrieve plan info, daily/weekly quota percentages, and credit-based usage.
  *
  * Endpoint: POST https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus
  * Auth: API key (sk-ws-... or devin-session-token$...) in metadata.apiKey
  * Protocol: Connect-RPC v1 (JSON over HTTP)
  *
- * Response shape (credit values are in hundredths — divide by 100 for display):
- *   userStatus.planStatus.planInfo.planName           "Free" | "Pro" | "Teams" | "Free Trial"
- *   userStatus.planStatus.planInfo.monthlyPromptCredits
- *   userStatus.planStatus.availablePromptCredits       total pool (negative = unlimited)
- *   userStatus.planStatus.usedPromptCredits            consumed
- *   userStatus.planStatus.availableFlexCredits         flex pool (optional)
- *   userStatus.planStatus.usedFlexCredits              flex consumed (optional)
- *   userStatus.planStatus.planStart                    ISO 8601
- *   userStatus.planStatus.planEnd                      ISO 8601
+ * Response shape:
+ *   userStatus.planStatus.planInfo.planName              "Free" | "Pro" | "Teams" | "Free Trial"
+ *   userStatus.planStatus.dailyQuotaRemainingPercent      0-100 (daily quota remaining %)
+ *   userStatus.planStatus.weeklyQuotaRemainingPercent     0-100 (weekly quota remaining %)
+ *   userStatus.planStatus.dailyQuotaResetAtUnix           Unix seconds (daily reset)
+ *   userStatus.planStatus.weeklyQuotaResetAtUnix          Unix seconds (weekly reset)
+ *   userStatus.planStatus.planStart                       ISO 8601 (billing cycle start)
+ *   userStatus.planStatus.planEnd                         ISO 8601 (billing cycle end)
+ *   userStatus.planStatus.availablePromptCredits          total pool (negative = unlimited)
+ *   userStatus.planStatus.usedPromptCredits               consumed
+ *   userStatus.planStatus.availableFlexCredits            flex pool (optional)
+ *   userStatus.planStatus.usedFlexCredits                 flex consumed (optional)
  *
  * Reverse-engineered from openusage (robinebers/openusage) and CodexBar (steipete/CodexBar).
  */
@@ -82,11 +85,44 @@ export async function getWindsurfUsage(apiKey: string): Promise<{
 
     const planName = String(planInfo.planName || "unknown");
     const planEnd = planStatus.planEnd as string | undefined;
-    const planStart = planStatus.planStart as string | undefined;
 
     const quotas: Record<string, UsageQuota> = {};
 
-    // Prompt credits — the primary usage metric.
+    // ── Daily quota (rolling 24h window) ────────────────────────────────────
+    // dailyQuotaRemainingPercent: 0-100, directly from API.
+    // dailyQuotaResetAtUnix: Unix seconds → convert to ms for parseResetTime.
+    const dailyRemainingPercent = toNumber(planStatus.dailyQuotaRemainingPercent, -1);
+    if (dailyRemainingPercent >= 0) {
+      const dailyResetUnix = toNumber(planStatus.dailyQuotaResetAtUnix, 0);
+      quotas.daily = {
+        used: 100 - dailyRemainingPercent,
+        total: 100,
+        remaining: dailyRemainingPercent,
+        remainingPercentage: clampPercentage(dailyRemainingPercent),
+        resetAt: dailyResetUnix > 0 ? parseResetTime(dailyResetUnix * 1000) : null,
+        unlimited: false,
+        displayName: "Daily Quota",
+      };
+    }
+
+    // ── Weekly quota (rolling 7d window) ───────────────────────────────────
+    // weeklyQuotaRemainingPercent: 0-100, directly from API.
+    // weeklyQuotaResetAtUnix: Unix seconds → convert to ms for parseResetTime.
+    const weeklyRemainingPercent = toNumber(planStatus.weeklyQuotaRemainingPercent, -1);
+    if (weeklyRemainingPercent >= 0) {
+      const weeklyResetUnix = toNumber(planStatus.weeklyQuotaResetAtUnix, 0);
+      quotas.weekly = {
+        used: 100 - weeklyRemainingPercent,
+        total: 100,
+        remaining: weeklyRemainingPercent,
+        remainingPercentage: clampPercentage(weeklyRemainingPercent),
+        resetAt: weeklyResetUnix > 0 ? parseResetTime(weeklyResetUnix * 1000) : null,
+        unlimited: false,
+        displayName: "Weekly Quota",
+      };
+    }
+
+    // ── Prompt credits (monthly billing cycle) ─────────────────────────────
     // Negative availablePromptCredits or monthlyPromptCredits = unlimited.
     const monthlyPromptCredits = toNumber(planInfo.monthlyPromptCredits, -1);
     const availablePromptCredits = toNumber(planStatus.availablePromptCredits, -1);
@@ -117,7 +153,7 @@ export async function getWindsurfUsage(apiKey: string): Promise<{
       };
     }
 
-    // Flex credits — optional add-on pool (not all plans have this).
+    // ── Flex credits — optional add-on pool ────────────────────────────────
     const availableFlexCredits = toNumber(planStatus.availableFlexCredits, -1);
     const usedFlexCredits = toNumber(planStatus.usedFlexCredits, 0);
 
