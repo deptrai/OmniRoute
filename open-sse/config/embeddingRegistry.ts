@@ -259,6 +259,32 @@ export const EMBEDDING_PROVIDERS: Record<string, EmbeddingProvider> = {
       { id: "jina-colbert-v2", name: "Jina ColBERT v2", dimensions: 128 },
     ],
   },
+
+  // Self-hosted: HuggingFace Text Embeddings Inference (TEI).
+  // Default localhost URL; users override the port via a provider_node if needed.
+  // authType "none" — TEI does not require an API key by default.
+  tei: {
+    id: "tei",
+    baseUrl: "http://localhost:8080/v1/embeddings",
+    authType: "none",
+    authHeader: "none",
+    models: [
+      { id: "BAAI/bge-large-en-v1.5", name: "BGE Large EN v1.5", dimensions: 1024 },
+      { id: "BAAI/bge-base-en-v1.5", name: "BGE Base EN v1.5", dimensions: 768 },
+      { id: "BAAI/bge-m3", name: "BGE-M3", dimensions: 1024 },
+      { id: "intfloat/e5-large-v2", name: "E5 Large v2", dimensions: 1024 },
+      {
+        id: "intfloat/multilingual-e5-large-instruct",
+        name: "Multilingual E5 Large Instruct",
+        dimensions: 1024,
+      },
+      { id: "Qwen/Qwen3-Embedding-8B", name: "Qwen3 Embedding 8B", dimensions: 4096 },
+      { id: "Qwen/Qwen3-Embedding-4B", name: "Qwen3 Embedding 4B", dimensions: 2560 },
+      { id: "Qwen/Qwen3-Embedding-0.6B", name: "Qwen3 Embedding 0.6B", dimensions: 1024 },
+      { id: "nomic-ai/nomic-embed-text-v1.5", name: "Nomic Embed Text v1.5", dimensions: 768 },
+      { id: "sentence-transformers/all-MiniLM-L6-v2", name: "all-MiniLM-L6-v2", dimensions: 384 },
+    ],
+  },
 };
 
 const EMBEDDING_PROVIDER_ALIASES: Record<string, string> = {
