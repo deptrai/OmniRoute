@@ -241,6 +241,39 @@ const sslOptions = {
 // Chat endpoints that should be intercepted
 const CHAT_URL_PATTERNS = [":generateContent", ":streamGenerateContent"];
 
+// Windsurf / Devin CLI uses Connect-RPC protobuf (not JSON).
+// Host: server.codeium.com — added to TARGET_HOSTS via targets.json at runtime.
+// URL pattern: /exa.api_server_pb.ApiServerService/GetChatMessage
+const WINDSURF_URL_PATTERN = "/exa.api_server_pb.ApiServerService/GetChatMessage";
+const WINDSURF_HOST = "server.codeium.com";
+
+// Lazy-load the windsurf handler (CJS) — only when a windsurf request arrives.
+let _windsurfHandler = null;
+function getWindsurfHandler() {
+  if (_windsurfHandler) return _windsurfHandler;
+  try {
+    _windsurfHandler = require("./_internal/windsurfHandler.cjs");
+  } catch (err) {
+    console.error(`[MITM] Failed to load windsurf handler: ${err.message}`);
+    _windsurfHandler = null;
+  }
+  return _windsurfHandler;
+}
+
+// Read mitmAlias for windsurf from SQLite (mirrors getMappedModel but for windsurf namespace).
+function getWindsurfMitmAlias() {
+  try {
+    const db = getSqliteDb();
+    if (db) {
+      const row = db
+        .prepare("SELECT value FROM key_value WHERE namespace = 'mitmAlias' AND key = 'windsurf'")
+        .get();
+      if (row) return JSON.parse(row.value);
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
 // Log directory for request/response dumps
 const LOG_DIR = path.join(__dirname, "../../logs/mitm");
 if (ENABLE_FILE_LOG && !fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -577,6 +610,26 @@ const server = https.createServer(sslOptions, async (req, res) => {
 
   if (!TARGET_HOSTS.has(host)) {
     vlog(1, `[MITM] → PASSTHROUGH (host ${host} not in target list)`);
+    return passthrough(req, res, bodyBuffer);
+  }
+
+  // Windsurf / Devin CLI: Connect-RPC protobuf (not JSON).
+  // Delegate to the windsurf handler which decodes protobuf internally.
+  if (host === WINDSURF_HOST && req.url.includes(WINDSURF_URL_PATTERN)) {
+    const handler = getWindsurfHandler();
+    if (handler) {
+      stats.interceptedRequests++;
+      stats.lastInterceptAt = new Date().toISOString();
+      writeStats();
+      vlog(1, `[MITM] WINDSURF INTERCEPT ${req.url}`);
+      return handler.intercept(req, res, bodyBuffer, passthrough, {
+        routerBaseUrl: ROUTER_BASE_URL,
+        routerApiKey: API_KEY,
+        getMitmAlias: getWindsurfMitmAlias,
+      });
+    }
+    // Handler unavailable → passthrough
+    vlog(1, `[MITM] → PASSTHROUGH (windsurf handler unavailable)`);
     return passthrough(req, res, bodyBuffer);
   }
 

@@ -12,6 +12,7 @@ const AGENT_COLORS: Record<AgentId, { emoji: string; label: string; color: strin
   "claude-code": { emoji: "🟡", label: "CC", color: "text-yellow-300" },
   "open-code": { emoji: "⚪", label: "OC", color: "text-gray-400" },
   trae: { emoji: "⬛", label: "TR", color: "text-gray-500" },
+  windsurf: { emoji: "🟦", label: "WS", color: "text-cyan-400" },
 };
 
 interface AgentEmojiProps {

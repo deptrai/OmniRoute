@@ -19,6 +19,7 @@ import { ZED_TARGET } from "./zed";
 import { CLAUDE_CODE_TARGET } from "./claudeCode";
 import { OPEN_CODE_TARGET } from "./openCode";
 import { TRAE_TARGET } from "./trae";
+import { WINDSURF_TARGET } from "./windsurf";
 
 export const ALL_TARGETS: MitmTarget[] = [
   ANTIGRAVITY_TARGET,
@@ -30,6 +31,7 @@ export const ALL_TARGETS: MitmTarget[] = [
   CLAUDE_CODE_TARGET,
   OPEN_CODE_TARGET,
   TRAE_TARGET,
+  WINDSURF_TARGET,
 ];
 
 /**
@@ -60,10 +62,7 @@ export type ConnectionRoute =
  *   2. known target host — decrypt and dispatch to the matching handler
  *   3. anything else — passthrough (transparent TCP forward)
  */
-export function routeConnection(
-  hostname: string,
-  userBypass: string[] = []
-): ConnectionRoute {
+export function routeConnection(hostname: string, userBypass: string[] = []): ConnectionRoute {
   if (shouldBypass(hostname, userBypass)) {
     return { kind: "bypass", reason: "bypass" };
   }

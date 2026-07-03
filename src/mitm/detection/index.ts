@@ -18,6 +18,7 @@ import { detectCursor } from "./cursor";
 import { detectZed } from "./zed";
 import { detectClaudeCode } from "./claudeCode";
 import { detectOpenCode } from "./openCode";
+import { detectWindsurf } from "./windsurf";
 
 export const DETECTORS: Record<AgentId, () => DetectionResult> = {
   antigravity: detectAntigravity,
@@ -29,6 +30,7 @@ export const DETECTORS: Record<AgentId, () => DetectionResult> = {
   "claude-code": detectClaudeCode,
   "open-code": detectOpenCode,
   trae: () => ({ installed: false }),
+  windsurf: detectWindsurf,
 };
 
 export function detectAgent(id: AgentId): DetectionResult {
@@ -50,4 +52,5 @@ export {
   detectZed,
   detectClaudeCode,
   detectOpenCode,
+  detectWindsurf,
 };
