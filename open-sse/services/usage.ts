@@ -41,6 +41,7 @@ import {
   getMiniMaxErrorSummary,
 } from "./usage/minimax.ts";
 import { getGlmUsage } from "./usage/glm.ts";
+import { getWindsurfUsage } from "./usage/windsurf.ts";
 // Re-exported para o teste glm-coding-plan-monthly (importa de services/usage).
 export { glmMonthlyRemainingPercentage } from "./usage/glm.ts";
 import {
@@ -499,6 +500,7 @@ export const USAGE_FETCHER_PROVIDERS = [
   "vertex",
   "vertex-partner",
   "codebuddy-cn",
+  "windsurf",
 ] as const;
 
 export type UsageFetcherProvider = (typeof USAGE_FETCHER_PROVIDERS)[number];
@@ -577,6 +579,8 @@ export async function getUsageForProvider(
       return await getXiaomiMimoUsage(id || "");
     case "codebuddy-cn":
       return await getCodeBuddyCnUsage(accessToken, apiKey, providerSpecificData);
+    case "windsurf":
+      return await getWindsurfUsage(apiKey || accessToken || "");
     default:
       return { message: `Usage API not implemented for ${provider}` };
   }

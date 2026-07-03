@@ -411,6 +411,7 @@ export const USAGE_SUPPORTED_PROVIDERS = [
   "vertex",
   "vertex-partner",
   "codebuddy-cn",
+  "windsurf",
 ];
 
 // ── Zod validation at module load (Phase 7.2) ──
