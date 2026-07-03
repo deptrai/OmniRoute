@@ -159,4 +159,19 @@ export const LOCAL_PROVIDERS = {
       "No API key required. Configure the local ComfyUI base URL (default: http://localhost:8188).",
     localDefault: "http://localhost:8188",
   },
+  tei: {
+    id: "tei",
+    alias: "tei",
+    name: "Text Embeddings Inference",
+    icon: "scatter_plot",
+    color: "#FF9D00",
+    textIcon: "TE",
+    website: "https://github.com/huggingface/text-embeddings-inference",
+    hasFree: true,
+    serviceKinds: ["embedding"],
+    authHint:
+      "No API key required. Configure the local TEI OpenAI-compatible base URL (default: http://localhost:8080/v1). TEI exposes /v1/embeddings for text embeddings and /v1/rerank for reranking.",
+    localDefault: "http://localhost:8080/v1",
+    passthroughModels: true,
+  },
 };
