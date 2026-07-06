@@ -55,8 +55,13 @@ export const windsurf = {
    * Keep the object signature.
    */
   mapTokens(tokens: { accessToken: string }) {
+    // The Windsurf token (sk-ws-... or devin-session-token$...) is a long-lived
+    // API key, not an OAuth access token. Store it as authType=apikey so the
+    // connection doesn't require a refresh token (which would mark it expired).
     return {
-      accessToken: tokens.accessToken,
+      authType: "apikey" as const,
+      apiKey: tokens.accessToken,
+      accessToken: null,
       refreshToken: null,
       expiresIn: null as number | null,
     };
