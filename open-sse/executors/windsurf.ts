@@ -1013,6 +1013,7 @@ export class WindsurfExecutor extends BaseExecutor {
         const enc = new TextEncoder();
         let roleEmitted = false;
         let totalText = "";
+        let hasReasoning = false;
         let promptTokens = 0;
         let completionTokens = 0;
         let hadError: string | null = null;
@@ -1126,13 +1127,15 @@ export class WindsurfExecutor extends BaseExecutor {
               );
             }
 
-            // GLM models stream text content via field 9 (delta_thinking)
-            // instead of field 3 (delta_text). Emit it as content too.
-            // Gate to GLM models only — other models use field 9 for actual
-            // reasoning/thinking tokens that should not leak into user-visible content.
+            // GLM-5.x models stream thinking/reasoning via field 9 (delta_thinking)
+            // and actual content via field 3 (delta_text). Emit field 9 as
+            // reasoning_content so downstream translators (openai-to-claude) create
+            // proper thinking blocks instead of merging thinking into text.
+            // Gate to GLM models only — other models use field 9 for internal
+            // reasoning tokens that should not leak into user-visible content.
             const isGlmModel = /glm/i.test(model);
             if (isGlmModel && resp.deltaThinking) {
-              totalText += resp.deltaThinking;
+              hasReasoning = true;
               ensureRole();
               emit(
                 `data: ${JSON.stringify({
@@ -1141,7 +1144,11 @@ export class WindsurfExecutor extends BaseExecutor {
                   created,
                   model,
                   choices: [
-                    { index: 0, delta: { content: resp.deltaThinking }, finish_reason: null },
+                    {
+                      index: 0,
+                      delta: { reasoning_content: resp.deltaThinking },
+                      finish_reason: null,
+                    },
                   ],
                 })}\n\n`
               );
@@ -1311,7 +1318,7 @@ export class WindsurfExecutor extends BaseExecutor {
             // For tool calls, use "stop" (not "tool_calls") because the arguments
             // may be truncated mid-JSON — "tool_calls" signals the client to
             // parse and execute, which would fail on incomplete JSON.
-            if (roleEmitted && (totalText || sawToolCalls)) {
+            if (roleEmitted && (totalText || hasReasoning || sawToolCalls)) {
               emit(
                 `data: ${JSON.stringify({
                   id: responseId,

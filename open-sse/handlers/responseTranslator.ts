@@ -590,12 +590,16 @@ function convertOpenAINonStreamingToClaude(openaiResponse: JsonRecord): JsonReco
   const hasToolCalls = Array.isArray(messageObj.tool_calls) && messageObj.tool_calls.length > 0;
 
   if (messageObj.content !== undefined && messageObj.content !== null) {
-    hasTextOrReasoning = true;
     const resolvedText = toString(messageObj.content);
-    content.push({
-      type: "text",
-      text: resolvedText === "" ? "(empty response)" : resolvedText,
-    });
+    // Skip empty text block when thinking or tool_calls are present —
+    // emitting "(empty response)" alongside tool_use confuses Claude Code.
+    if (resolvedText !== "" || (!hasTextOrReasoning && !hasToolCalls)) {
+      hasTextOrReasoning = true;
+      content.push({
+        type: "text",
+        text: resolvedText === "" ? "(empty response)" : resolvedText,
+      });
+    }
   } else if (!hasTextOrReasoning) {
     content.push({
       type: "text",
