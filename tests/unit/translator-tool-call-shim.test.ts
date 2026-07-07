@@ -1,12 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { applyToolCallShimToBuffer, hasToolCallShim, __test } = await import(
-  "../../open-sse/translator/helpers/toolCallShim.ts"
-);
-const { openaiToClaudeResponse } = await import(
-  "../../open-sse/translator/response/openai-to-claude.ts"
-);
+const { applyToolCallShimToBuffer, hasToolCallShim, __test } =
+  await import("../../open-sse/translator/helpers/toolCallShim.ts");
+const { openaiToClaudeResponse } =
+  await import("../../open-sse/translator/response/openai-to-claude.ts");
 
 const { coerceToArray } = __test as { coerceToArray: (v: unknown) => unknown[] };
 
@@ -14,6 +12,8 @@ const { coerceToArray } = __test as { coerceToArray: (v: unknown) => unknown[] }
 
 test("hasToolCallShim: returns true for registered shims", () => {
   assert.equal(hasToolCallShim("Read"), true);
+  assert.equal(hasToolCallShim("Skill"), true);
+  assert.equal(hasToolCallShim("TaskUpdate"), true);
   assert.equal(hasToolCallShim("submit_pr_review"), true);
   assert.equal(hasToolCallShim("some_other_tool"), false);
   assert.equal(hasToolCallShim(""), false);
@@ -120,30 +120,21 @@ test("applyToolCallShimToBuffer: Read coerces numeric-string limit/offset", () =
 
 test("applyToolCallShimToBuffer: Read strips pages for non-PDF files", () => {
   const out = JSON.parse(
-    applyToolCallShimToBuffer(
-      "Read",
-      JSON.stringify({ file_path: "/etc/hosts", pages: "1-3" })
-    )
+    applyToolCallShimToBuffer("Read", JSON.stringify({ file_path: "/etc/hosts", pages: "1-3" }))
   );
   assert.equal("pages" in out, false);
 });
 
 test("applyToolCallShimToBuffer: Read strips malformed pages even on PDFs", () => {
   const out = JSON.parse(
-    applyToolCallShimToBuffer(
-      "Read",
-      JSON.stringify({ file_path: "/tmp/doc.pdf", pages: "abc" })
-    )
+    applyToolCallShimToBuffer("Read", JSON.stringify({ file_path: "/tmp/doc.pdf", pages: "abc" }))
   );
   assert.equal("pages" in out, false);
 });
 
 test("applyToolCallShimToBuffer: Read accepts a single page on PDFs", () => {
   const out = JSON.parse(
-    applyToolCallShimToBuffer(
-      "Read",
-      JSON.stringify({ file_path: "/tmp/doc.PDF", pages: "7" })
-    )
+    applyToolCallShimToBuffer("Read", JSON.stringify({ file_path: "/tmp/doc.PDF", pages: "7" }))
   );
   assert.equal(out.pages, "7");
 });
@@ -234,6 +225,95 @@ test("applyToolCallShimToBuffer: submit_pr_review with unparseable buffer -> emp
 test("applyToolCallShimToBuffer: non-shimmed tool passes raw through", () => {
   const raw = '{"x":1}';
   assert.equal(applyToolCallShimToBuffer("some_other_tool", raw), raw);
+});
+
+// -------- Skill shim tests (GLM-5.2 emits `name` instead of `skill`) --------
+
+test("applyToolCallShimToBuffer: Skill remaps name -> skill when skill is missing", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Skill",
+      JSON.stringify({ name: "bmad-code-review", args: "review epic 17" })
+    )
+  );
+  assert.equal(out.skill, "bmad-code-review");
+  assert.equal(out.args, "review epic 17");
+  assert.equal("name" in out, false, "name must be removed after remap");
+});
+
+test("applyToolCallShimToBuffer: Skill preserves skill when already correct", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Skill",
+      JSON.stringify({ skill: "bmad-code-review", args: "review epic 17" })
+    )
+  );
+  assert.equal(out.skill, "bmad-code-review");
+  assert.equal(out.args, "review epic 17");
+  assert.equal("name" in out, false);
+});
+
+test("applyToolCallShimToBuffer: Skill does not remap name when skill is present", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Skill",
+      JSON.stringify({ skill: "correct-skill", name: "wrong-skill", args: "x" })
+    )
+  );
+  assert.equal(out.skill, "correct-skill");
+  assert.equal("name" in out, false, "stray name should be dropped when skill exists");
+});
+
+test("applyToolCallShimToBuffer: Skill with no name and no skill passes through", () => {
+  const out = JSON.parse(applyToolCallShimToBuffer("Skill", JSON.stringify({ args: "x" })));
+  assert.deepEqual(out, { args: "x" });
+});
+
+test("applyToolCallShimToBuffer: Skill with empty buffer -> empty object", () => {
+  const out = JSON.parse(applyToolCallShimToBuffer("Skill", ""));
+  assert.deepEqual(out, {});
+});
+
+// -------- TaskUpdate shim tests (GLM-5.2 emits taskId as number) --------
+
+test("applyToolCallShimToBuffer: TaskUpdate coerces numeric taskId -> string", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ taskId: 1, status: "in_progress" }))
+  );
+  assert.equal(out.taskId, "1");
+  assert.equal(typeof out.taskId, "string");
+  assert.equal(out.status, "in_progress");
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate preserves string taskId", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ taskId: "abc-123", status: "done" }))
+  );
+  assert.equal(out.taskId, "abc-123");
+  assert.equal(out.status, "done");
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate coerces large numeric taskId -> string", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "TaskUpdate",
+      JSON.stringify({ taskId: 1234567890, status: "completed" })
+    )
+  );
+  assert.equal(out.taskId, "1234567890");
+  assert.equal(typeof out.taskId, "string");
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate with no taskId passes through", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ status: "done" }))
+  );
+  assert.deepEqual(out, { status: "done" });
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate with empty buffer -> empty object", () => {
+  const out = JSON.parse(applyToolCallShimToBuffer("TaskUpdate", ""));
+  assert.deepEqual(out, {});
 });
 
 // -------- Streaming integration tests --------

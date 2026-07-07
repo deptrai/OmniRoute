@@ -220,7 +220,8 @@
       "tests/unit/strip-reasoning-header.test.ts",
       "tests/unit/tproxy-route.test.ts",
       "tests/unit/types-barrel-model-cooldown.test.ts",
-      "tests/unit/upstream-retry-hints-toggle.test.ts"
+      "tests/unit/upstream-retry-hints-toggle.test.ts",
+      "tests/unit/translator-tool-call-shim.test.ts"
     ],
     "nodeArgs": [
       "--import",
@@ -307,7 +308,8 @@
     "open-sse/handlers/chatCore/executorHelpers.ts",
     "open-sse/handlers/chatCore/telemetryHelpers.ts",
     "open-sse/handlers/chatCore/memorySkillsInjection.ts",
-    "open-sse/handlers/chatCore/semanticCache.ts"
+    "open-sse/handlers/chatCore/semanticCache.ts",
+    "open-sse/translator/helpers/toolCallShim.ts"
   ],
   "_ignorePatterns_comment": [
     "ignorePatterns = files NOT copied into the Stryker sandbox. It does NOT scope",

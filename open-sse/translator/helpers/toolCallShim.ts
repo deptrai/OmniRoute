@@ -63,6 +63,30 @@ function sanitizeReadArgs(args: Record<string, unknown>): void {
   }
 }
 
+// Claude Code's Skill tool requires `skill` (string) + optional `args`.
+// GLM-5.2 and other non-Anthropic models frequently emit `name` instead of `skill`
+// (because `name` is a common parameter in other tools), causing InputValidationError
+// "The required parameter `skill` is missing" and a wasted retry round-trip.
+// Remap `name` → `skill` when `skill` is absent.
+function sanitizeSkillArgs(args: Record<string, unknown>): void {
+  // Remap name -> skill when skill is missing (GLM-5.2 confuses the two).
+  if (!("skill" in args) && typeof args.name === "string") {
+    args.skill = args.name;
+  }
+  // `name` is never a valid Skill parameter — always remove it.
+  delete args.name;
+}
+
+// Paperclip MCP's TaskUpdate tool requires `taskId` as string, but GLM-5.2 and
+// other non-Anthropic models emit it as a number (e.g. `taskId: 1`), causing
+// InputValidationError "The parameter `taskId` type is expected as `string` but
+// provided as `number`" and a 9x retry loop. Coerce number → string.
+function sanitizeTaskUpdateArgs(args: Record<string, unknown>): void {
+  if (typeof args.taskId === "number") {
+    args.taskId = String(args.taskId);
+  }
+}
+
 const TOOL_SHIMS: Record<string, ShimFn> = {
   // Claude Code Read rejects bad params and retries — wasting tokens with non-Anthropic
   // models that emit oversized limits, negative offsets, stringified numbers, or stray
@@ -72,6 +96,22 @@ const TOOL_SHIMS: Record<string, ShimFn> = {
     if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
     const patched = { ...(input as Record<string, unknown>) };
     sanitizeReadArgs(patched);
+    return patched;
+  },
+  // Claude Code Skill tool: GLM-5.2 emits `name` instead of `skill`, causing
+  // InputValidationError + retry. Remap so the first call succeeds.
+  Skill: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeSkillArgs(patched);
+    return patched;
+  },
+  // Paperclip MCP TaskUpdate: GLM-5.2 emits `taskId` as number instead of string,
+  // causing InputValidationError + 9x retry loop. Coerce number → string.
+  TaskUpdate: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeTaskUpdateArgs(patched);
     return patched;
   },
   submit_pr_review: (input) => {
