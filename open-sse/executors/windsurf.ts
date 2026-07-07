@@ -1345,7 +1345,9 @@ export class WindsurfExecutor extends BaseExecutor {
 
           // If nothing was streamed but we got a response, treat the decoded
           // text as the full reply (unary response path — raw protobuf, no framing).
-          if (!roleEmitted && totalText) {
+          // Include hasReasoning so GLM reasoning-only responses (field 9, no field 3)
+          // are not silently dropped.
+          if (!roleEmitted && (totalText || hasReasoning)) {
             emit(
               `data: ${JSON.stringify({
                 id: responseId,
@@ -1357,15 +1359,17 @@ export class WindsurfExecutor extends BaseExecutor {
                 ],
               })}\n\n`
             );
-            emit(
-              `data: ${JSON.stringify({
-                id: responseId,
-                object: "chat.completion.chunk",
-                created,
-                model,
-                choices: [{ index: 0, delta: { content: totalText }, finish_reason: null }],
-              })}\n\n`
-            );
+            if (totalText) {
+              emit(
+                `data: ${JSON.stringify({
+                  id: responseId,
+                  object: "chat.completion.chunk",
+                  created,
+                  model,
+                  choices: [{ index: 0, delta: { content: totalText }, finish_reason: null }],
+                })}\n\n`
+              );
+            }
           }
 
           // Finish chunk — use "tool_calls" finish_reason if we emitted any tool calls
