@@ -304,6 +304,24 @@ test("applyToolCallShimToBuffer: TaskUpdate coerces large numeric taskId -> stri
   assert.equal(typeof out.taskId, "string");
 });
 
+test("applyToolCallShimToBuffer: TaskUpdate remaps id -> taskId when taskId is missing", () => {
+  // Real-world case: GLM emits `id` instead of `taskId`
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ id: 1, status: "completed" }))
+  );
+  assert.equal(out.taskId, "1");
+  assert.equal(out.status, "completed");
+  assert.equal("id" in out, false, "id should be removed after remap");
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate remaps string id -> taskId", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ id: "abc-123", status: "done" }))
+  );
+  assert.equal(out.taskId, "abc-123");
+  assert.equal("id" in out, false);
+});
+
 test("applyToolCallShimToBuffer: TaskUpdate with no taskId passes through", () => {
   const out = JSON.parse(
     applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ status: "done" }))

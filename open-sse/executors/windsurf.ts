@@ -1232,6 +1232,16 @@ export class WindsurfExecutor extends BaseExecutor {
                   // First frame with only an id, no name yet — buffer and wait
                   continue;
                 }
+                // Defer emission when first frame has name but NO arguments.
+                // GLM-5.2-max sometimes emits a phantom tool call header (id + name)
+                // with empty arguments, then never sends args for it. If we emit
+                // content_block_start with input:{}, the downstream shim can't
+                // populate it, causing InputValidationError. By deferring, we only
+                // emit when args actually arrive (or skip entirely if they don't).
+                if (isFirst && entry.name && !tc.argumentsJson) {
+                  // Have name but no args yet — buffer and wait for args
+                  continue;
+                }
                 entry.started = true;
 
                 const toolCallDelta: Record<string, unknown> = {

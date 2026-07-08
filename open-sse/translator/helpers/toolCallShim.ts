@@ -78,10 +78,16 @@ function sanitizeSkillArgs(args: Record<string, unknown>): void {
 }
 
 // Paperclip MCP's TaskUpdate tool requires `taskId` as string, but GLM-5.2 and
-// other non-Anthropic models emit it as a number (e.g. `taskId: 1`), causing
-// InputValidationError "The parameter `taskId` type is expected as `string` but
-// provided as `number`" and a 9x retry loop. Coerce number → string.
+// other non-Anthropic models emit it as:
+//   - a number (e.g. `taskId: 1`) → coerce to string
+//   - `id` instead of `taskId` (e.g. `id: 1`) → remap to taskId
+// Either case causes InputValidationError and a retry loop.
 function sanitizeTaskUpdateArgs(args: Record<string, unknown>): void {
+  // Remap `id` → `taskId` when `taskId` is absent (GLM common mistake)
+  if (!("taskId" in args) && "id" in args) {
+    args.taskId = args.id;
+    delete args.id;
+  }
   if (typeof args.taskId === "number") {
     args.taskId = String(args.taskId);
   }
