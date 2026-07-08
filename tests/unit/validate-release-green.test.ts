@@ -15,23 +15,25 @@ const {
 } = mod;
 
 test("eslintCounts sums errors + warnings across files", () => {
-  const parsed = [
-    { errorCount: 2, warningCount: 5 },
-    { errorCount: 0, warningCount: 3 },
-    {},
-  ];
+  const parsed = [{ errorCount: 2, warningCount: 5 }, { errorCount: 0, warningCount: 3 }, {}];
   assert.deepEqual(eslintCounts(parsed), { errors: 2, warnings: 8 });
 });
 
 test("parseEslintJson tolerates a leading non-JSON banner", () => {
-  const out = "npm warn something\n[{\"errorCount\":0,\"warningCount\":1}]";
+  const out = 'npm warn something\n[{"errorCount":0,"warningCount":1}]';
   assert.deepEqual(parseEslintJson(out), [{ errorCount: 0, warningCount: 1 }]);
   assert.equal(parseEslintJson("no json here"), null);
 });
 
 test("parseCognitiveCount reads the gate's count (en + pt)", () => {
-  assert.equal(parseCognitiveCount("[cognitive-complexity] 797 function(s) exceed the threshold (15)."), 797);
-  assert.equal(parseCognitiveCount("[cognitive-complexity] REGRESSÃO — 801 violações > baseline 797"), 801);
+  assert.equal(
+    parseCognitiveCount("[cognitive-complexity] 797 function(s) exceed the threshold (15)."),
+    797
+  );
+  assert.equal(
+    parseCognitiveCount("[cognitive-complexity] REGRESSÃO — 801 violações > baseline 797"),
+    801
+  );
   assert.equal(parseCognitiveCount("no number"), null);
 });
 
@@ -120,4 +122,68 @@ test("classifyRunError: a kill WITHOUT a configured timeout is not misreported a
   const r = classifyRunError({ killed: true }, undefined);
   assert.equal(r.code, 1);
   assert.doesNotMatch(r.out, /ceiling/);
+});
+
+test("pre-flight wires the test-masking PR-context gate against origin/main (v3.8.43 gap fix)", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(
+    new URL("../../scripts/quality/validate-release-green.mjs", import.meta.url),
+    "utf8"
+  );
+  // The gate must run check:test-masking, pin the base to main, and be classified HARD —
+  // it caught a real net-assert reduction that only surfaced on the release PR before.
+  assert.match(src, /check:test-masking/, "test-masking gate must be wired into the pre-flight");
+  assert.match(src, /GITHUB_BASE_REF:\s*"main"/, "test-masking must diff against origin/main");
+  assert.match(
+    src,
+    /id:\s*"test-masking"[\s\S]*?kind:\s*"hard"/,
+    "test-masking must be a HARD gate (non-allowlisted weakening blocks the release)"
+  );
+  // run() must honor a per-gate env override so GITHUB_BASE_REF actually reaches the child
+  // (routed through buildGateEnv since the --hermetic scrub was added).
+  assert.match(
+    src,
+    /env:\s*buildGateEnv\(opts\.env\)/,
+    "run() must merge opts.env into the child env"
+  );
+  assert.match(
+    src,
+    /\.\.\.\(extra \|\| \{\}\)/,
+    "buildGateEnv must spread the per-gate env override"
+  );
+});
+
+test("pre-flight --hermetic scrubs the live-test trigger vars (2026-07-05 false-positive fix)", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(
+    new URL("../../scripts/quality/validate-release-green.mjs", import.meta.url),
+    "utf8"
+  );
+  // A dev machine with OMNIROUTE_API_KEY set runs 17+ live tests that CI skips —
+  // the pre-flight must be able to reproduce the CI env exactly.
+  assert.match(src, /HERMETIC_SCRUB\s*=\s*\["OMNIROUTE_API_KEY",\s*"OMNIROUTE_URL"\]/);
+  assert.match(src, /args\.has\("--hermetic"\)/, "--hermetic flag must be parsed");
+  // Per-gate logs: a red must be diagnosable from _artifacts/release-green/<gate>.log
+  // without re-running the gate.
+  assert.match(src, /saveGateLog/, "per-gate output must be persisted");
+  assert.match(src, /_artifacts[/", ]+release-green/, "logs must land in _artifacts/release-green");
+});
+
+test("pre-flight runs the slow suites CONCURRENTLY (v3.8.45 perf — was ~1h serial)", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(
+    new URL("../../scripts/quality/validate-release-green.mjs", import.meta.url),
+    "utf8"
+  );
+  // main() must be async and the slow suites (unit/vitest/integration/pack-artifact)
+  // must run via a single Promise.all over runAsync — not four sequential hardCmd calls.
+  assert.match(src, /async function main\(\)/, "main must be async to await the parallel wave");
+  assert.match(src, /const execFileAsync = promisify\(execFile\)/, "async runner must exist");
+  assert.match(src, /await Promise\.all\(\s*slow\.map\(/, "slow suites must run concurrently");
+  // The four slow-gate ids must all be present in the parallel wave.
+  for (const id of ["unit", "vitest", "integration", "pack-artifact"]) {
+    assert.ok(src.includes(`id: "${id}"`), `slow gate ${id} must be in the parallel wave`);
+  }
+  // Each still saves its per-gate log for red diagnosis without a re-run.
+  assert.match(src, /slow\.forEach\([\s\S]*?saveGateLog\(g\.id/, "each slow gate persists its log");
 });
