@@ -316,6 +316,84 @@ test("applyToolCallShimToBuffer: TaskUpdate with empty buffer -> empty object", 
   assert.deepEqual(out, {});
 });
 
+// -------- Agent shim tests (GLM-5.2-max emits `description` instead of `prompt`) --------
+
+test("applyToolCallShimToBuffer: Agent remaps description -> prompt when prompt is missing", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({
+        description: "UX designer review Admin Console plan",
+        agent: "general-purpose",
+      })
+    )
+  );
+  assert.equal(out.prompt, "UX designer review Admin Console plan");
+  assert.equal(out.agent, "general-purpose");
+  assert.equal("description" in out, false, "stray description should be dropped");
+});
+
+test("applyToolCallShimToBuffer: Agent preserves prompt when already correct", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({ prompt: "Review the architecture", agent: "general-purpose" })
+    )
+  );
+  assert.equal(out.prompt, "Review the architecture");
+  assert.equal(out.agent, "general-purpose");
+  assert.equal("description" in out, false);
+});
+
+test("applyToolCallShimToBuffer: Agent does not remap description when prompt is present", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({
+        prompt: "correct prompt",
+        description: "wrong description",
+        agent: "general-purpose",
+      })
+    )
+  );
+  assert.equal(out.prompt, "correct prompt");
+  assert.equal(
+    "description" in out,
+    false,
+    "stray description should be dropped when prompt exists"
+  );
+});
+
+test("applyToolCallShimToBuffer: Agent with no description and no prompt passes through", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("Agent", JSON.stringify({ agent: "general-purpose" }))
+  );
+  assert.equal(out.agent, "general-purpose");
+  assert.equal("prompt" in out, false);
+  assert.equal("description" in out, false);
+});
+
+test("applyToolCallShimToBuffer: Agent with empty buffer -> empty object", () => {
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", ""));
+  assert.deepEqual(out, {});
+});
+
+test("applyToolCallShimToBuffer: Agent remaps description only (no agent field)", () => {
+  // Real-world case from session 241b7ee8: GLM-5.2-max emitted only description, no agent
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({ description: "UX designer review Admin Console plan" })
+    )
+  );
+  assert.equal(out.prompt, "UX designer review Admin Console plan");
+  assert.equal("description" in out, false);
+});
+
+test("hasToolCallShim: returns true for Agent", () => {
+  assert.equal(hasToolCallShim("Agent"), true);
+});
+
 // -------- Streaming integration tests --------
 
 function freshState() {

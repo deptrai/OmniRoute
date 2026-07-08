@@ -87,6 +87,19 @@ function sanitizeTaskUpdateArgs(args: Record<string, unknown>): void {
   }
 }
 
+// Claude Code's Agent tool requires `prompt` (string), but GLM-5.2-max emits
+// `description` instead (because `description` is a common parameter name in
+// other tools), causing InputValidationError "The required parameter `prompt`
+// is missing" and a wasted retry round-trip.
+// Remap `description` → `prompt` when `prompt` is absent.
+function sanitizeAgentArgs(args: Record<string, unknown>): void {
+  if (!("prompt" in args) && typeof args.description === "string") {
+    args.prompt = args.description;
+  }
+  // `description` is never a valid Agent parameter — always remove it.
+  delete args.description;
+}
+
 const TOOL_SHIMS: Record<string, ShimFn> = {
   // Claude Code Read rejects bad params and retries — wasting tokens with non-Anthropic
   // models that emit oversized limits, negative offsets, stringified numbers, or stray
@@ -112,6 +125,15 @@ const TOOL_SHIMS: Record<string, ShimFn> = {
     if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
     const patched = { ...(input as Record<string, unknown>) };
     sanitizeTaskUpdateArgs(patched);
+    return patched;
+  },
+  // Claude Code Agent tool: GLM-5.2-max emits `description` instead of `prompt`,
+  // causing InputValidationError "The required parameter `prompt` is missing".
+  // Remap so the first call succeeds.
+  Agent: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeAgentArgs(patched);
     return patched;
   },
   submit_pr_review: (input) => {
