@@ -87,17 +87,19 @@ function sanitizeTaskUpdateArgs(args: Record<string, unknown>): void {
   }
 }
 
-// Claude Code's Agent tool requires `prompt` (string), but GLM-5.2-max emits
-// `description` instead (because `description` is a common parameter name in
-// other tools), causing InputValidationError "The required parameter `prompt`
-// is missing" and a wasted retry round-trip.
-// Remap `description` → `prompt` when `prompt` is absent.
+// Claude Code's Agent tool requires BOTH `description` (short task summary)
+// AND `prompt` (full task instructions). GLM-5.2-max emits only `description`
+// (with the full task text) and omits `prompt`, causing InputValidationError
+// "The required parameter `prompt` is missing".
+// Fix: copy `description` → `prompt` when `prompt` is absent, but KEEP
+// `description` because the Agent tool requires it too.
 function sanitizeAgentArgs(args: Record<string, unknown>): void {
-  if (!("prompt" in args) && typeof args.description === "string") {
-    args.prompt = args.description;
+  if (!("prompt" in args) || typeof args.prompt !== "string" || args.prompt === "") {
+    if (typeof args.description === "string" && args.description !== "") {
+      args.prompt = args.description;
+    }
   }
-  // `description` is never a valid Agent parameter — always remove it.
-  delete args.description;
+  // Do NOT delete `description` — Agent tool requires it.
 }
 
 const TOOL_SHIMS: Record<string, ShimFn> = {
@@ -127,9 +129,9 @@ const TOOL_SHIMS: Record<string, ShimFn> = {
     sanitizeTaskUpdateArgs(patched);
     return patched;
   },
-  // Claude Code Agent tool: GLM-5.2-max emits `description` instead of `prompt`,
-  // causing InputValidationError "The required parameter `prompt` is missing".
-  // Remap so the first call succeeds.
+  // Claude Code Agent tool: GLM-5.2-max emits only `description` (with full
+  // task text) but omits `prompt`. Agent tool requires BOTH. Copy description
+  // → prompt when prompt is absent, keep description intact.
   Agent: (input) => {
     if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
     const patched = { ...(input as Record<string, unknown>) };

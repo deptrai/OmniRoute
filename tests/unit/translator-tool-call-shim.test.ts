@@ -318,7 +318,7 @@ test("applyToolCallShimToBuffer: TaskUpdate with empty buffer -> empty object", 
 
 // -------- Agent shim tests (GLM-5.2-max emits `description` instead of `prompt`) --------
 
-test("applyToolCallShimToBuffer: Agent remaps description -> prompt when prompt is missing", () => {
+test("applyToolCallShimToBuffer: Agent copies description -> prompt when prompt is missing", () => {
   const out = JSON.parse(
     applyToolCallShimToBuffer(
       "Agent",
@@ -330,7 +330,11 @@ test("applyToolCallShimToBuffer: Agent remaps description -> prompt when prompt 
   );
   assert.equal(out.prompt, "UX designer review Admin Console plan");
   assert.equal(out.agent, "general-purpose");
-  assert.equal("description" in out, false, "stray description should be dropped");
+  assert.equal(
+    out.description,
+    "UX designer review Admin Console plan",
+    "description must be kept"
+  );
 });
 
 test("applyToolCallShimToBuffer: Agent preserves prompt when already correct", () => {
@@ -345,23 +349,20 @@ test("applyToolCallShimToBuffer: Agent preserves prompt when already correct", (
   assert.equal("description" in out, false);
 });
 
-test("applyToolCallShimToBuffer: Agent does not remap description when prompt is present", () => {
+test("applyToolCallShimToBuffer: Agent keeps description when prompt is present", () => {
+  // Agent tool requires BOTH description AND prompt. When both present, keep both.
   const out = JSON.parse(
     applyToolCallShimToBuffer(
       "Agent",
       JSON.stringify({
         prompt: "correct prompt",
-        description: "wrong description",
+        description: "short description",
         agent: "general-purpose",
       })
     )
   );
   assert.equal(out.prompt, "correct prompt");
-  assert.equal(
-    "description" in out,
-    false,
-    "stray description should be dropped when prompt exists"
-  );
+  assert.equal(out.description, "short description", "description must be kept");
 });
 
 test("applyToolCallShimToBuffer: Agent with no description and no prompt passes through", () => {
@@ -378,7 +379,7 @@ test("applyToolCallShimToBuffer: Agent with empty buffer -> empty object", () =>
   assert.deepEqual(out, {});
 });
 
-test("applyToolCallShimToBuffer: Agent remaps description only (no agent field)", () => {
+test("applyToolCallShimToBuffer: Agent copies description only (no agent field)", () => {
   // Real-world case from session 241b7ee8: GLM-5.2-max emitted only description, no agent
   const out = JSON.parse(
     applyToolCallShimToBuffer(
@@ -387,7 +388,11 @@ test("applyToolCallShimToBuffer: Agent remaps description only (no agent field)"
     )
   );
   assert.equal(out.prompt, "UX designer review Admin Console plan");
-  assert.equal("description" in out, false);
+  assert.equal(
+    out.description,
+    "UX designer review Admin Console plan",
+    "description must be kept"
+  );
 });
 
 test("hasToolCallShim: returns true for Agent", () => {
@@ -404,7 +409,11 @@ test("applyToolCallShimToBuffer: Agent with truncated description (missing closi
   const repaired = '{"description": "UX designer review Admin Console plan"}';
   const out = JSON.parse(applyToolCallShimToBuffer("Agent", truncated, repaired));
   assert.equal(out.prompt, "UX designer review Admin Console plan");
-  assert.equal("description" in out, false);
+  assert.equal(
+    out.description,
+    "UX designer review Admin Console plan",
+    "description kept after repair"
+  );
 });
 
 test("applyToolCallShimToBuffer: Agent with truncated description, no repair provided -> falls back to {}", () => {
@@ -438,14 +447,15 @@ test("applyToolCallShimToBuffer: Agent with truncated nested value + repaired ra
   const out = JSON.parse(applyToolCallShimToBuffer("Agent", truncated, repaired));
   assert.equal(out.prompt, "Review the plan");
   assert.equal(out.agent, "general-purpose");
-  assert.equal("description" in out, false);
+  assert.equal(out.description, "Review the plan", "description kept after repair");
 });
 
 test("applyToolCallShimToBuffer: Agent with valid JSON, repairedRaw ignored (raw parses fine)", () => {
-  const raw = '{"prompt": "already correct"}';
+  const raw = '{"prompt": "already correct", "description": "short"}';
   const out = JSON.parse(applyToolCallShimToBuffer("Agent", raw, '{"description": "wrong"}'));
   // raw parses successfully, so repairedRaw is not used
   assert.equal(out.prompt, "already correct");
+  assert.equal(out.description, "short");
 });
 
 // -------- Streaming integration tests --------
