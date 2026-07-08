@@ -166,7 +166,7 @@ function resolveWsModelId(model: string): string {
 // Implements only what is needed for GetChatMessageRequest.
 // Wire types: 0 = varint, 2 = length-delimited.
 
-function encodeVarint(value: number): Uint8Array {
+export function encodeVarint(value: number): Uint8Array {
   const bytes: number[] = [];
   let v = value >>> 0;
   while (v > 0x7f) {
@@ -209,7 +209,7 @@ function encodeMessage(fieldNum: number, msg: Uint8Array): Uint8Array {
 }
 
 /** Encode a varint field (wire type 0) — used for enums and booleans. */
-function encodeVarintField(fieldNum: number, value: number): Uint8Array {
+export function encodeVarintField(fieldNum: number, value: number): Uint8Array {
   const tag = encodeVarint((fieldNum << 3) | 0);
   return concatBytes([tag, encodeVarint(value)]);
 }
@@ -376,7 +376,7 @@ function buildChatToolChoice(choice: WsToolChoice): Uint8Array {
   return concatBytes(parts);
 }
 
-function buildGetChatMessageRequest(
+export function buildGetChatMessageRequest(
   apiKey: string,
   model: string,
   messages: WsChatMessage[],

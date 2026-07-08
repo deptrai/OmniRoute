@@ -15,7 +15,7 @@ import { appendToolCallArgumentDelta } from "../../utils/toolCallArguments.ts";
  * be emitted as an additional input_json_delta without duplicating the
  * partial fragments already streamed to the client.
  */
-function tryRepairTruncatedJson(raw: string): string | null {
+export function tryRepairTruncatedJson(raw: string): string | null {
   if (!raw || typeof raw !== "string") return null;
   // Try parsing as-is first — if it's valid, no repair needed
   try {
