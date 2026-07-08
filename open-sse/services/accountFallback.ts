@@ -165,6 +165,10 @@ export const CREDITS_EXHAUSTED_SIGNALS = [
   "insufficient balance",
   "insufficient_balance",
   "insufficient account balance",
+  // Windsurf/Devin returns 502 with this body when daily plan quota is used up.
+  // Without this signal, 502 is classified as SERVER_ERROR instead of QUOTA_EXHAUSTED,
+  // so the connection is never marked credits_exhausted and account rotation never fires.
+  "quota has been exhausted",
 ];
 
 // T11: Signals that indicate OAuth token is invalid/expired (not permanent deactivation)
@@ -1236,6 +1240,7 @@ export function isDailyQuotaExhausted(errorText: string): boolean {
   return (
     lower.includes("today's quota") ||
     lower.includes("daily quota") ||
+    lower.includes("daily usage quota") ||
     lower.includes("try again tomorrow")
   );
 }

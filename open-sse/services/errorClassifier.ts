@@ -187,6 +187,14 @@ export function classifyProviderError(
   if (statusCode >= 400 && CONTENT_POLICY_BLOCK_REGEX.test(bodyStr)) {
     return PROVIDER_ERROR_TYPES.CONTENT_POLICY_BLOCK;
   }
+  // Windsurf/Devin returns 502 with a quota-exhausted body when the daily plan
+  // quota is used up. Without this check, 502 falls into the generic SERVER_ERROR
+  // bucket below, the connection is never marked credits_exhausted, and account
+  // rotation never fires — so the same dead account is retried instead of
+  // switching to a healthy sibling account.
+  if (statusCode >= 500 && creditsExhausted) {
+    return PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED;
+  }
   if (statusCode >= 500) return PROVIDER_ERROR_TYPES.SERVER_ERROR;
 
   if (statusCode === 400 && isContextOverflow(bodyStr)) {
