@@ -381,7 +381,8 @@ function buildGetChatMessageRequest(
   model: string,
   messages: WsChatMessage[],
   tools?: WsToolDefinition[],
-  toolChoice?: WsToolChoice
+  toolChoice?: WsToolChoice,
+  maxTokens?: number
 ): Uint8Array {
   const sessionId = randomUUID();
   const cascadeId = randomUUID();
@@ -398,6 +399,14 @@ function buildGetChatMessageRequest(
 
   for (const msg of messages) {
     parts.push(encodeMessage(3, buildChatMessagePrompt(msg))); // chat_message_prompts
+  }
+
+  // field 4: max_tokens (uint32) — forward client's max_tokens so the model
+  // has enough budget to complete tool call JSON after reasoning. Without this,
+  // Windsurf defaults to 1024 output tokens, truncating tool call arguments
+  // mid-JSON (missing closing `}`), causing InputValidationError in Claude Code.
+  if (maxTokens && maxTokens > 0) {
+    parts.push(encodeVarintField(4, maxTokens));
   }
 
   // field 10: repeated ChatToolDefinition tools — native tool definitions
@@ -959,7 +968,8 @@ export class WindsurfExecutor extends BaseExecutor {
       wsModel,
       wsMessages,
       wsTools,
-      wsToolChoice
+      wsToolChoice,
+      typeof b.max_tokens === "number" ? b.max_tokens : undefined
     );
     const framedPayload = grpcWebFrame(protoPayload); // same format as gRPC-web data frame
 

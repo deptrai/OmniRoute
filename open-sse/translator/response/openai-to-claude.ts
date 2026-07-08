@@ -4,6 +4,87 @@ import { CLAUDE_OAUTH_TOOL_PREFIX } from "../request/openai-to-claude.ts";
 import { hasToolCallShim, applyToolCallShimToBuffer } from "../helpers/toolCallShim.ts";
 import { appendToolCallArgumentDelta } from "../../utils/toolCallArguments.ts";
 
+/**
+ * Try to repair truncated tool call JSON arguments. When a model hits
+ * max_tokens mid-JSON, the closing `}` (and sometimes `]`) is missing,
+ * causing InputValidationError in Claude Code. This attempts to close
+ * open arrays and objects by counting unmatched brackets.
+ *
+ * Returns the missing suffix (closing brackets) to append, or null if
+ * repair is not needed/possible. Only the suffix is returned so it can
+ * be emitted as an additional input_json_delta without duplicating the
+ * partial fragments already streamed to the client.
+ */
+function tryRepairTruncatedJson(raw: string): string | null {
+  if (!raw || typeof raw !== "string") return null;
+  // Try parsing as-is first — if it's valid, no repair needed
+  try {
+    JSON.parse(raw);
+    return null;
+  } catch {
+    // Continue to repair
+  }
+
+  // Count unmatched brackets (ignoring strings)
+  let braceDepth = 0; // {}
+  let bracketDepth = 0; // []
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") braceDepth++;
+    else if (ch === "}") braceDepth--;
+    else if (ch === "[") bracketDepth++;
+    else if (ch === "]") bracketDepth--;
+  }
+
+  // If brackets are balanced, the JSON is malformed for another reason — don't repair
+  if (braceDepth === 0 && bracketDepth === 0) return null;
+
+  // Only repair if we have positive depth (missing closers) and the string
+  // starts with `{` (it's a JSON object, which is the expected tool call input shape)
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+
+  // Build the suffix to append: close open string, trim trailing comma, add closers
+  let suffix = "";
+  // If we're inside a string at the end, close the string first
+  if (inString) {
+    suffix += '"';
+  }
+  // Build full repaired string to verify it parses
+  let repairedBase = raw + suffix;
+  // Trim trailing comma from the base
+  repairedBase = repairedBase.replace(/[,]\s*$/, "");
+  // Recalculate suffix after trim
+  suffix = repairedBase.slice(raw.length);
+
+  for (let i = 0; i < bracketDepth; i++) suffix += "]";
+  for (let i = 0; i < braceDepth; i++) suffix += "}";
+
+  // Verify the repaired JSON parses
+  try {
+    JSON.parse(raw + suffix);
+    return suffix;
+  } catch {
+    return null;
+  }
+}
+
 // Helper: stop thinking block if started
 function stopThinkingBlock(state, results) {
   if (!state.thinkingBlockStarted) return;
@@ -238,15 +319,31 @@ export function openaiToClaudeResponse(chunk, state) {
     stopTextBlock(state, results);
 
     for (const [, toolInfo] of state.toolCalls) {
+      const rawArgs = toolInfo.argBuffer || "";
+
       // For shimmed tools, emit one corrective input_json_delta with the
       // fully patched JSON before closing the block.
       if (toolInfo.shimmed) {
-        const patched = applyToolCallShimToBuffer(toolInfo.name, toolInfo.argBuffer || "");
+        const patched = applyToolCallShimToBuffer(toolInfo.name, rawArgs);
         results.push({
           type: "content_block_delta",
           index: toolInfo.blockIndex,
           delta: { type: "input_json_delta", partial_json: patched },
         });
+      } else {
+        // Auto-repair truncated JSON for non-shimmed tools. When a model hits
+        // max_tokens mid-JSON (common with Windsurf/GLM when reasoning eats the
+        // token budget), the closing `}` is missing, causing InputValidationError.
+        // Try to close unmatched brackets and emit the repaired JSON as a
+        // corrective delta before closing the block.
+        const repaired = tryRepairTruncatedJson(rawArgs);
+        if (repaired) {
+          results.push({
+            type: "content_block_delta",
+            index: toolInfo.blockIndex,
+            delta: { type: "input_json_delta", partial_json: repaired },
+          });
+        }
       }
 
       results.push({
