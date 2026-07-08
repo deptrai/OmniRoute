@@ -153,18 +153,38 @@ export function hasToolCallShim(name: string | undefined | null): boolean {
 /**
  * Apply the registered shim for a tool call's raw assembled arguments string.
  * Returns a stringified JSON value safe to emit as input_json_delta.partial_json.
+ *
+ * If `repairedRaw` is provided (already repaired by caller), uses that instead
+ * of `raw`. This avoids re-parsing a truncated buffer that would fall back to
+ * `{}` and lose the fields the shim needs to remap.
+ *
  * If the buffer is unparseable, returns the empty-object JSON `{}` after applying
  * the shim with `{}` as input (so required arrays still get injected).
  */
-export function applyToolCallShimToBuffer(name: string, raw: string): string {
+export function applyToolCallShimToBuffer(name: string, raw: string, repairedRaw?: string): string {
   const shim = TOOL_SHIMS[name];
   if (!shim) return raw;
 
+  // Try raw first; if it fails (truncated JSON), fall back to repairedRaw
+  // (provided by caller via tryRepairTruncatedJson). This ensures we only
+  // use the repaired version when raw is actually unparseable.
   let parsed: unknown;
-  try {
-    parsed = raw && raw.length > 0 ? JSON.parse(raw) : {};
-  } catch {
+  if (!raw || raw.length === 0) {
     parsed = {};
+  } else {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      if (repairedRaw && repairedRaw.length > 0) {
+        try {
+          parsed = JSON.parse(repairedRaw);
+        } catch {
+          parsed = {};
+        }
+      } else {
+        parsed = {};
+      }
+    }
   }
 
   const patched = shim(parsed);

@@ -394,6 +394,60 @@ test("hasToolCallShim: returns true for Agent", () => {
   assert.equal(hasToolCallShim("Agent"), true);
 });
 
+// -------- Truncated JSON + shim interaction tests --------
+// GLM-5.2-max cuts off tool call args mid-stream, leaving unmatched brackets.
+// Without repair, the shim falls back to {} and loses the fields it needs to remap.
+
+test("applyToolCallShimToBuffer: Agent with truncated description (missing closing brace) + repaired raw", () => {
+  // Real-world case from session 241b7ee8: GLM streamed {"description": "..." with no closing }
+  const truncated = '{"description": "UX designer review Admin Console plan"';
+  const repaired = '{"description": "UX designer review Admin Console plan"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", truncated, repaired));
+  assert.equal(out.prompt, "UX designer review Admin Console plan");
+  assert.equal("description" in out, false);
+});
+
+test("applyToolCallShimToBuffer: Agent with truncated description, no repair provided -> falls back to {}", () => {
+  // Without repairedRaw, JSON.parse fails on truncated input -> {} -> no prompt
+  const truncated = '{"description": "UX designer review Admin Console plan"';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", truncated));
+  assert.equal("prompt" in out, false);
+  assert.equal("description" in out, false);
+});
+
+test("applyToolCallShimToBuffer: Skill with truncated name (missing closing brace) + repaired raw", () => {
+  const truncated = '{"name": "bmad-product-brief"';
+  const repaired = '{"name": "bmad-product-brief"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Skill", truncated, repaired));
+  assert.equal(out.skill, "bmad-product-brief");
+  assert.equal("name" in out, false);
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate with truncated taskId (missing closing brace) + repaired raw", () => {
+  const truncated = '{"taskId": 1, "status": "in_progress"';
+  const repaired = '{"taskId": 1, "status": "in_progress"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("TaskUpdate", truncated, repaired));
+  assert.equal(out.taskId, "1");
+  assert.equal(out.status, "in_progress");
+});
+
+test("applyToolCallShimToBuffer: Agent with truncated nested value + repaired raw", () => {
+  // Truncated mid-string-value with nested structure
+  const truncated = '{"description": "Review the plan", "agent": "general-purpose"';
+  const repaired = '{"description": "Review the plan", "agent": "general-purpose"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", truncated, repaired));
+  assert.equal(out.prompt, "Review the plan");
+  assert.equal(out.agent, "general-purpose");
+  assert.equal("description" in out, false);
+});
+
+test("applyToolCallShimToBuffer: Agent with valid JSON, repairedRaw ignored (raw parses fine)", () => {
+  const raw = '{"prompt": "already correct"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", raw, '{"description": "wrong"}'));
+  // raw parses successfully, so repairedRaw is not used
+  assert.equal(out.prompt, "already correct");
+});
+
 // -------- Streaming integration tests --------
 
 function freshState() {

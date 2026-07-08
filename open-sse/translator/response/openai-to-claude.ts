@@ -321,22 +321,26 @@ export function openaiToClaudeResponse(chunk, state) {
     for (const [, toolInfo] of state.toolCalls) {
       const rawArgs = toolInfo.argBuffer || "";
 
-      // For shimmed tools, emit one corrective input_json_delta with the
-      // fully patched JSON before closing the block.
+      // Auto-repair truncated JSON for ALL tools (shimmed and non-shimmed).
+      // When a model hits max_tokens mid-JSON (common with Windsurf/GLM when
+      // reasoning eats the token budget), the closing `}` is missing, causing
+      // JSON.parse to fail. For shimmed tools this is especially critical:
+      // without repair, the shim falls back to `{}` and loses the very fields
+      // it needs to remap (e.g. GLM's `description` → Agent's `prompt`).
+      const repaired = tryRepairTruncatedJson(rawArgs);
+
       if (toolInfo.shimmed) {
-        const patched = applyToolCallShimToBuffer(toolInfo.name, rawArgs);
+        // For shimmed tools, emit one corrective input_json_delta with the
+        // fully patched JSON before closing the block. Pass the repaired raw
+        // so the shim can parse and remap fields from the truncated buffer.
+        const patched = applyToolCallShimToBuffer(toolInfo.name, rawArgs, repaired ?? undefined);
         results.push({
           type: "content_block_delta",
           index: toolInfo.blockIndex,
           delta: { type: "input_json_delta", partial_json: patched },
         });
       } else {
-        // Auto-repair truncated JSON for non-shimmed tools. When a model hits
-        // max_tokens mid-JSON (common with Windsurf/GLM when reasoning eats the
-        // token budget), the closing `}` is missing, causing InputValidationError.
-        // Try to close unmatched brackets and emit the repaired JSON as a
-        // corrective delta before closing the block.
-        const repaired = tryRepairTruncatedJson(rawArgs);
+        // Non-shimmed: emit the repaired JSON as a corrective delta.
         if (repaired) {
           results.push({
             type: "content_block_delta",
