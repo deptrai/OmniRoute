@@ -88,18 +88,25 @@ function sanitizeTaskUpdateArgs(args: Record<string, unknown>): void {
 }
 
 // Claude Code's Agent tool requires BOTH `description` (short task summary)
-// AND `prompt` (full task instructions). GLM-5.2-max emits only `description`
-// (with the full task text) and omits `prompt`, causing InputValidationError
-// "The required parameter `prompt` is missing".
-// Fix: copy `description` → `prompt` when `prompt` is absent, but KEEP
-// `description` because the Agent tool requires it too.
+// AND `prompt` (full task instructions). GLM-5.2-max is inconsistent:
+//   - Sometimes emits only `description` (omits `prompt`)
+//   - Sometimes emits only `prompt` (omits `description`)
+//   - Sometimes emits both
+// Both missing-field cases cause InputValidationError and a wasted retry.
+// Fix: ensure BOTH fields exist by copying whichever is missing from the other.
 function sanitizeAgentArgs(args: Record<string, unknown>): void {
-  if (!("prompt" in args) || typeof args.prompt !== "string" || args.prompt === "") {
-    if (typeof args.description === "string" && args.description !== "") {
-      args.prompt = args.description;
-    }
+  const hasPrompt = typeof args.prompt === "string" && args.prompt !== "";
+  const hasDescription = typeof args.description === "string" && args.description !== "";
+
+  if (!hasPrompt && hasDescription) {
+    // GLM emitted only description — copy to prompt
+    args.prompt = args.description;
+  } else if (!hasDescription && hasPrompt) {
+    // GLM emitted only prompt — copy to description (truncate to ~80 chars for summary)
+    const promptStr = args.prompt as string;
+    args.description = promptStr.length > 80 ? promptStr.slice(0, 77) + "..." : promptStr;
   }
-  // Do NOT delete `description` — Agent tool requires it.
+  // If both present or both absent, leave as-is.
 }
 
 const TOOL_SHIMS: Record<string, ShimFn> = {
@@ -129,9 +136,9 @@ const TOOL_SHIMS: Record<string, ShimFn> = {
     sanitizeTaskUpdateArgs(patched);
     return patched;
   },
-  // Claude Code Agent tool: GLM-5.2-max emits only `description` (with full
-  // task text) but omits `prompt`. Agent tool requires BOTH. Copy description
-  // → prompt when prompt is absent, keep description intact.
+  // Claude Code Agent tool: GLM-5.2-max inconsistently emits only `description`
+  // OR only `prompt` — but Agent tool requires BOTH. Shim ensures both exist by
+  // copying whichever is missing from the other.
   Agent: (input) => {
     if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
     const patched = { ...(input as Record<string, unknown>) };

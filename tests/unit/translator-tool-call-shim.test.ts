@@ -337,7 +337,8 @@ test("applyToolCallShimToBuffer: Agent copies description -> prompt when prompt 
   );
 });
 
-test("applyToolCallShimToBuffer: Agent preserves prompt when already correct", () => {
+test("applyToolCallShimToBuffer: Agent preserves prompt when already correct, adds description from prompt", () => {
+  // GLM emits only prompt (no description) — shim must add description from prompt
   const out = JSON.parse(
     applyToolCallShimToBuffer(
       "Agent",
@@ -346,7 +347,8 @@ test("applyToolCallShimToBuffer: Agent preserves prompt when already correct", (
   );
   assert.equal(out.prompt, "Review the architecture");
   assert.equal(out.agent, "general-purpose");
-  assert.equal("description" in out, false);
+  assert.equal(typeof out.description, "string", "description added from prompt");
+  assert.equal(out.description, "Review the architecture");
 });
 
 test("applyToolCallShimToBuffer: Agent keeps description when prompt is present", () => {
@@ -393,6 +395,49 @@ test("applyToolCallShimToBuffer: Agent copies description only (no agent field)"
     "UX designer review Admin Console plan",
     "description must be kept"
   );
+});
+
+test("applyToolCallShimToBuffer: Agent copies prompt -> description when description is missing", () => {
+  // Real-world case: GLM emits only prompt (long), omits description
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({
+        prompt: "You are Sally, UX designer. Review the Admin Console UX plan.",
+        run_in_background: true,
+      })
+    )
+  );
+  assert.equal(out.prompt, "You are Sally, UX designer. Review the Admin Console UX plan.");
+  assert.equal(typeof out.description, "string", "description must be added");
+  assert.equal(out.description.length > 0, true);
+  assert.equal(out.run_in_background, true);
+});
+
+test("applyToolCallShimToBuffer: Agent truncates long prompt when copying to description", () => {
+  const longPrompt = "A".repeat(200);
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("Agent", JSON.stringify({ prompt: longPrompt }))
+  );
+  assert.equal(out.prompt, longPrompt);
+  assert.equal(out.description.length, 80, "description truncated to 80 chars");
+  assert.equal(out.description.endsWith("..."), true);
+});
+
+test("applyToolCallShimToBuffer: Agent with both prompt and description keeps both unchanged", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({
+        prompt: "full task",
+        description: "short summary",
+        agent: "general-purpose",
+      })
+    )
+  );
+  assert.equal(out.prompt, "full task");
+  assert.equal(out.description, "short summary");
+  assert.equal(out.agent, "general-purpose");
 });
 
 test("hasToolCallShim: returns true for Agent", () => {
