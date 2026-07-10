@@ -90,6 +90,15 @@ const MODEL_FAMILIES: Record<string, string[]> = {
   // GPT-5 family
   "gpt-5": ["gpt-5-mini", "gpt-4o"],
   "gpt-5.1": ["gpt-5.1-mini", "gpt-5", "gpt-4o"],
+
+  // Cognition SWE family — swe-1.7 has intermittent invalid_argument server-side
+  // issues; fall back to swe-1.6 (stable) then swe-1.5
+  "swe-1.8": ["swe-1.7", "swe-1.6", "swe-1.5"],
+  "swe-1.8-fast": ["swe-1.7-fast", "swe-1.6-fast", "swe-1.5-fast"],
+  "swe-1.7": ["swe-1.6", "swe-1.5"],
+  "swe-1.7-fast": ["swe-1.6-fast", "swe-1.5-fast"],
+  "swe-1.6": ["swe-1.5"],
+  "swe-1.6-fast": ["swe-1.5-fast"],
 };
 
 // ── Error Detection ──────────────────────────────────────────────────────────
@@ -121,6 +130,9 @@ const MODEL_UNAVAILABLE_FRAGMENTS = [
  */
 export function isModelUnavailableError(status: number, errorMessage: string): boolean {
   if (status === 404) return true;
+  // Windsurf swe-1.7+ returns 502 invalid_argument intermittently (server-side
+  // validation bug). Treat as model-unavailable so family fallback to swe-1.6 kicks in.
+  if (status === 502 && errorMessage.toLowerCase().includes("invalid_argument")) return true;
   if (status !== 400 && status !== 403) return false;
 
   const msg = errorMessage.toLowerCase();
