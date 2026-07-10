@@ -987,6 +987,17 @@ export class WindsurfExecutor extends BaseExecutor {
     );
     const framedPayload = grpcWebFrame(protoPayload); // same format as gRPC-web data frame
 
+    // Debug: log first 80 chars of each message content for swe-1.7 to find content-triggered invalid_argument
+    if (wsModel.includes("swe-1-7")) {
+      const msgDetails = wsMessages.map((m) => {
+        const role = m.role || "?";
+        const c = typeof m.content === "string" ? m.content : "";
+        const preview = c.slice(0, 80).replace(/\n/g, "\\n");
+        return `${role}:${c.length}c[${preview}]`;
+      });
+      console.warn(`[WS_DEBUG2 swe-1.7] msgs=[${msgDetails.join(" | ")}]`);
+    }
+
     const url = this.buildUrl();
     const headers = this.buildHeaders(credentials);
     mergeUpstreamExtraHeaders(headers, upstreamExtraHeaders);
