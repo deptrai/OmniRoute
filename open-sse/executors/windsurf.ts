@@ -155,6 +155,7 @@ const MODEL_ALIAS_MAP: Record<string, string> = {
   "glm-5.2": "glm-5-2",
   "glm-5.2-high": "glm-5-2",
   "glm-5.2-max": "glm-5-2-max",
+  "glm-5.2-max-1m": "glm-5-2-max-1m",
   "glm-5.1": "glm-5-1",
 };
 

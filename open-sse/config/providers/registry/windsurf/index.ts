@@ -126,9 +126,10 @@ export const windsurfProvider: RegistryEntry = {
     { id: "kimi-k2.7", name: "Kimi K2.7", contextLength: 131000 },
     { id: "kimi-k2.6", name: "Kimi K2.6", contextLength: 131000 },
     { id: "kimi-k2.5", name: "Kimi K2.5", contextLength: 131000 },
-    { id: "glm-5.2", name: "GLM-5.2", contextLength: 128000 },
-    { id: "glm-5.2-high", name: "GLM-5.2 High", contextLength: 128000 },
-    { id: "glm-5.2-max", name: "GLM-5.2 Max", contextLength: 128000 },
+    { id: "glm-5.2", name: "GLM-5.2", contextLength: 200000 },
+    { id: "glm-5.2-high", name: "GLM-5.2 High", contextLength: 200000 },
+    { id: "glm-5.2-max", name: "GLM-5.2 Max", contextLength: 200000 },
+    { id: "glm-5.2-max-1m", name: "GLM-5.2 Max 1M", contextLength: 1000000 },
     { id: "glm-5.1", name: "GLM-5.1", contextLength: 128000 },
   ],
 };

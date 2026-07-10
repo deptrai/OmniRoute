@@ -30,7 +30,7 @@ const WINDSURF_MODEL_UID_TO_ALIAS = {
   "claude-sonnet-4-6-thinking": "ws/sonnet-4.6",
   "claude-opus-4-8-medium": "ws/opus-4.8",
   "glm-5-2": "ws/glm-5-2",
-  "glm-5-2-max-1m": "ws/glm-5-2",
+  "glm-5-2-max-1m": "ws/glm-5.2-max-1m",
   "swe-1-6": "ws/swe-1-6",
   "swe-1-6-fast": "ws/swe-1-6",
   "MODEL_MINIMAX_M2_1": "ws/minimax-m2.7",
