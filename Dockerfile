@@ -57,8 +57,8 @@ RUN test -f package-lock.json \
   || (echo "package-lock.json is required for reproducible Docker builds" >&2 && exit 1)
 RUN --mount=type=cache,target=/root/.npm \
   npm ci --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
-  && npm rebuild better-sqlite3 \
-  && node -e "require('better-sqlite3')(':memory:').close()"
+  && cd node_modules/better-sqlite3 && npx --yes node-gyp rebuild \
+  && cd /app && node -e "require('better-sqlite3')(':memory:').close()"
 
 # Build with webpack (stable). Turbopack hit a non-recoverable internal panic on this
 # Next.js version during the v3.8.27 release build — TurbopackInternalError "entered
