@@ -983,6 +983,20 @@ export class WindsurfExecutor extends BaseExecutor {
     );
     const framedPayload = grpcWebFrame(protoPayload); // same format as gRPC-web data frame
 
+    // Debug: log payload details for swe-1.7 to diagnose intermittent invalid_argument
+    if (wsModel.includes("swe-1-7")) {
+      const msgDetails = wsMessages.map((m) => {
+        const role = m.role || "?";
+        const contentLen = typeof m.content === "string" ? m.content.length : 0;
+        const tcCount = m.toolCalls?.length ?? 0;
+        const hasToolCallId = m.toolCallId ? 1 : 0;
+        return `${role}:${contentLen}c${tcCount > 0 ? `/${tcCount}tc` : ""}${hasToolCallId ? "/tr" : ""}`;
+      });
+      console.warn(
+        `[WS_DEBUG swe-1.7] payload=${framedPayload.length}B msgs=[${msgDetails.join(", ")}] tools=${wsTools?.length ?? 0} toolChoice=${wsToolChoice?.optionName ?? wsToolChoice?.toolName ?? "none"} maxTokens=${typeof b.max_tokens === "number" ? b.max_tokens : "none"}`
+      );
+    }
+
     const url = this.buildUrl();
     const headers = this.buildHeaders(credentials);
     mergeUpstreamExtraHeaders(headers, upstreamExtraHeaders);
