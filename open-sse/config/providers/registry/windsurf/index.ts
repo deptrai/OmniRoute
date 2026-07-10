@@ -17,6 +17,8 @@ export const windsurfProvider: RegistryEntry = {
   // dot-notation = OmniRoute ID; executor MODEL_ALIAS_MAP maps it to Windsurf modelUid.
   models: [
     // ── Cognition / SWE ──────────────────────────────────────────────────
+    { id: "swe-1.8-fast", name: "SWE-1.8 Fast" },
+    { id: "swe-1.8", name: "SWE-1.8" },
     { id: "swe-1.7-fast", name: "SWE-1.7 Fast" },
     { id: "swe-1.7", name: "SWE-1.7" },
     { id: "swe-1.6-fast", name: "SWE-1.6 Fast" },

@@ -166,7 +166,15 @@ export function getNextFamilyFallback(
   // Fall back to the bare model name to support keys like "gemini-3.1-pro-high"
   // whose dots are part of the literal name, not a version separator.
   const lookupKey = bareModel.replace(/\./g, "-");
-  const family = MODEL_FAMILIES[lookupKey] ?? MODEL_FAMILIES[bareModel];
+  // Also try converting hyphens back to dots for models like swe-1-7 → swe-1.7
+  // where the family key uses dot notation but the provider sends hyphen notation.
+  const dotVariant = bareModel.replace(/-(\d+)-(\d+)$/, "-$1.$2");
+  const dotVariant2 = bareModel.replace(/-(\d+)-(\d+)-/, "-$1.$2-");
+  const family =
+    MODEL_FAMILIES[lookupKey] ??
+    MODEL_FAMILIES[bareModel] ??
+    MODEL_FAMILIES[dotVariant] ??
+    MODEL_FAMILIES[dotVariant2];
   if (!family) return null;
 
   // Resolve the provider's supported model IDs so we can match notation (dot vs hyphen)
@@ -197,7 +205,15 @@ export function getNextFamilyFallback(
 export function isInModelFamily(model: string): boolean {
   const parsed = parseModel(model);
   const bareModel = parsed.model || model;
-  return bareModel in MODEL_FAMILIES;
+  const lookupKey = bareModel.replace(/\./g, "-");
+  const dotVariant = bareModel.replace(/-(\d+)-(\d+)$/, "-$1.$2");
+  const dotVariant2 = bareModel.replace(/-(\d+)-(\d+)-/, "-$1.$2-");
+  return (
+    lookupKey in MODEL_FAMILIES ||
+    bareModel in MODEL_FAMILIES ||
+    dotVariant in MODEL_FAMILIES ||
+    dotVariant2 in MODEL_FAMILIES
+  );
 }
 
 /**
@@ -209,7 +225,14 @@ export function getModelFamily(model: string): string[] {
   const prefix =
     parsed.provider || parsed.providerAlias ? `${parsed.provider || parsed.providerAlias}/` : "";
 
-  const family = MODEL_FAMILIES[bareModel];
+  const lookupKey = bareModel.replace(/\./g, "-");
+  const dotVariant = bareModel.replace(/-(\d+)-(\d+)$/, "-$1.$2");
+  const dotVariant2 = bareModel.replace(/-(\d+)-(\d+)-/, "-$1.$2-");
+  const family =
+    MODEL_FAMILIES[lookupKey] ??
+    MODEL_FAMILIES[bareModel] ??
+    MODEL_FAMILIES[dotVariant] ??
+    MODEL_FAMILIES[dotVariant2];
   if (!family) return [model];
   return [model, ...family.map((c) => `${prefix}${c}`)];
 }

@@ -37,3 +37,15 @@ test("skips already-tried candidates and advances down the Fable chain", () => {
 test("returns null for an unknown family", () => {
   assert.equal(getNextFamilyFallback("cc/not-a-real-model", new Set()), null);
 });
+
+test("SWE hyphen-notation model finds family with dot-notation keys", () => {
+  // Windsurf sends `swe-1-7` (hyphens) but MODEL_FAMILIES uses `swe-1.7` (dots).
+  // The lookup must convert hyphens back to dots to find the SWE family.
+  const next = getNextFamilyFallback("windsurf/swe-1-7", new Set(["windsurf/swe-1-7"]));
+  assert.equal(next, "windsurf/swe-1.6");
+});
+
+test("SWE dot-notation model still works (no regression)", () => {
+  const next = getNextFamilyFallback("windsurf/swe-1.7", new Set(["windsurf/swe-1.7"]));
+  assert.equal(next, "windsurf/swe-1.6");
+});
