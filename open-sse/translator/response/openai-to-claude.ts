@@ -331,16 +331,21 @@ export function openaiToClaudeResponse(chunk, state) {
 
       if (toolInfo.shimmed) {
         // For shimmed tools, emit one corrective input_json_delta with the
-        // fully patched JSON before closing the block. Pass the repaired raw
-        // so the shim can parse and remap fields from the truncated buffer.
-        const patched = applyToolCallShimToBuffer(toolInfo.name, rawArgs, repaired ?? undefined);
+        // fully patched JSON before closing the block. Pass the FULL repaired
+        // string (raw + suffix) so the shim can parse and remap fields from
+        // the truncated buffer. tryRepairTruncatedJson returns only the suffix,
+        // so we concatenate raw + repaired to get the full parseable JSON.
+        const fullRepaired = repaired ? rawArgs + repaired : undefined;
+        const patched = applyToolCallShimToBuffer(toolInfo.name, rawArgs, fullRepaired);
         results.push({
           type: "content_block_delta",
           index: toolInfo.blockIndex,
           delta: { type: "input_json_delta", partial_json: patched },
         });
       } else {
-        // Non-shimmed: emit the repaired JSON as a corrective delta.
+        // Non-shimmed: emit the repaired JSON suffix as a corrective delta.
+        // The suffix (closing brackets) is appended to the already-streamed
+        // partial fragments, completing the JSON on the client side.
         if (repaired) {
           results.push({
             type: "content_block_delta",

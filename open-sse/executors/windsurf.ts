@@ -153,6 +153,7 @@ const MODEL_ALIAS_MAP: Record<string, string> = {
   "kimi-k2.6": "kimi-k2-6",
   "kimi-k2.5": "kimi-k2-5",
   "glm-5.2": "glm-5-2",
+  "glm-5.2-high": "glm-5-2-high",
   "glm-5.2-max": "glm-5-2-max",
   "glm-5.1": "glm-5-1",
 };
@@ -1433,3 +1434,35 @@ export class WindsurfExecutor extends BaseExecutor {
     });
   }
 }
+
+// Exposed for unit tests only.
+export const __test = {
+  readVarint,
+  decodeGetChatMessageResponse,
+  decodeChatToolCall,
+  encodeString,
+  encodeMessage,
+  encodeField,
+  encodeBoolField,
+  buildChatToolCall,
+  buildChatMessagePrompt,
+  buildChatToolDefinition,
+  buildChatToolChoice,
+  buildMetadata,
+  grpcWebFrame,
+  sanitizeJsonSchema,
+  openaiToolsToWs,
+  openaiToolChoiceToWs,
+  roleToSource,
+  resolveWsModelId,
+  detectOs,
+  detectHardware,
+  // Access the private transformToSSE via an unbound reference for testing.
+  // The method is arrow-bound in the class, so we extract it via prototype.
+  transformToSSE: WindsurfExecutor.prototype.transformToSSE as (
+    upstream: Response,
+    model: string,
+    stream: boolean,
+    hasTools: boolean
+  ) => Response,
+};
