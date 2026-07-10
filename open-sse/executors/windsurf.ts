@@ -1099,7 +1099,13 @@ export class WindsurfExecutor extends BaseExecutor {
               try {
                 const j = JSON.parse(trailer);
                 if (j?.error?.message) {
-                  hadError = j.error.message;
+                  // Include the gRPC/Connect error code (e.g. "resource_exhausted")
+                  // in the error string so the downstream error classifier can
+                  // match it against CREDITS_EXHAUSTED_SIGNALS. Without the code,
+                  // "an internal error occurred" from a resource_exhausted response
+                  // is classified as SERVER_ERROR instead of QUOTA_EXHAUSTED.
+                  const code = j.error.code ? `[${j.error.code}] ` : "";
+                  hadError = code + j.error.message;
                   return;
                 }
               } catch {
