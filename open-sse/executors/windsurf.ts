@@ -1004,36 +1004,36 @@ export class WindsurfExecutor extends BaseExecutor {
     });
 
     if (!upstream.ok && upstream.status !== 200) {
-      // Dump full request payload when swe-1.7+ fails with invalid_argument
-      if (wsModel.includes("swe-1-7") && upstream.status === 502) {
+      // Dump full request payload when swe-1.7+ fails with any error
+      if (wsModel.includes("swe-1-7")) {
         const respText = await upstream.text().catch(() => "");
-        if (respText.includes("invalid_argument")) {
-          // Log full wsMessages as JSON for replay debugging
-          const dump = JSON.stringify({
-            wsModel,
-            wsMessages: wsMessages.map((m) => ({
-              role: m.role,
-              content: typeof m.content === "string" ? m.content.slice(0, 500) : "",
-              contentLen: typeof m.content === "string" ? m.content.length : 0,
-              toolCallId: m.toolCallId,
-              toolCalls: m.toolCalls?.map((tc) => ({
-                id: tc.id,
-                name: tc.name,
-                argsLen: tc.argumentsJson.length,
-              })),
+        const dump = JSON.stringify({
+          wsModel,
+          httpStatus: upstream.status,
+          wsMessages: wsMessages.map((m) => ({
+            role: m.role,
+            contentLen: typeof m.content === "string" ? m.content.length : 0,
+            contentPreview: typeof m.content === "string" ? m.content.slice(0, 300) : "",
+            toolCallId: m.toolCallId,
+            toolCalls: m.toolCalls?.map((tc) => ({
+              id: tc.id,
+              name: tc.name,
+              argsLen: tc.argumentsJson.length,
+              argsPreview: tc.argumentsJson.slice(0, 200),
             })),
-            wsTools: wsTools?.map((t) => ({
-              name: t.name,
-              descLen: t.description.length,
-              schemaLen: t.jsonSchemaString.length,
-            })),
-            wsToolChoice,
-            maxTokens: typeof b.max_tokens === "number" ? b.max_tokens : undefined,
-            payloadLen: framedPayload.length,
-            respText: respText.slice(0, 200),
-          });
-          console.warn(`[WS_DUMP swe-1.7] ${dump}`);
-        }
+          })),
+          wsTools: wsTools?.map((t) => ({
+            name: t.name,
+            descLen: t.description.length,
+            schemaLen: t.jsonSchemaString.length,
+          })),
+          wsToolChoice,
+          maxTokens: typeof b.max_tokens === "number" ? b.max_tokens : undefined,
+          payloadLen: framedPayload.length,
+          respText: respText.slice(0, 500),
+          respHeaders: Object.fromEntries(upstream.headers.entries()),
+        });
+        console.warn(`[WS_DUMP3 swe-1.7] ${dump}`);
         // Re-create response since we consumed the body
         return {
           response: new Response(respText, { status: upstream.status, headers: upstream.headers }),
