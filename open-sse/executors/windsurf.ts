@@ -367,12 +367,14 @@ function buildChatToolDefinition(tool: WsToolDefinition): Uint8Array {
 }
 
 // ChatToolChoice { string option_name = 1; string tool_name = 2; }
+// option_name: "auto" | "none" — "any" is rejected by swe-1.7+ with invalid_argument,
+// so openaiToolChoiceToWs maps "any"/"required" → "auto" instead.
 type WsToolChoice = { optionName?: string; toolName?: string };
 
 function buildChatToolChoice(choice: WsToolChoice): Uint8Array {
   const parts: Uint8Array[] = [];
   if (choice.optionName) {
-    parts.push(encodeString(1, choice.optionName)); // option_name: "auto" | "any" | "none"
+    parts.push(encodeString(1, choice.optionName)); // option_name: "auto" | "none"
   }
   if (choice.toolName) {
     parts.push(encodeString(2, choice.toolName)); // tool_name (specific tool)
@@ -861,7 +863,10 @@ function openaiToolChoiceToWs(toolChoice: unknown): WsToolChoice | undefined {
     // "auto" | "none" | "required"
     if (toolChoice === "auto") return { optionName: "auto" };
     if (toolChoice === "none") return { optionName: "none" };
-    if (toolChoice === "required") return { optionName: "any" };
+    // "required" → "auto": Windsurf's "any" option triggers invalid_argument
+    // on newer models (swe-1.7+). "auto" still permits tool calls, just doesn't
+    // force them — safer than a hard rejection.
+    if (toolChoice === "required") return { optionName: "auto" };
     return undefined;
   }
   if (typeof toolChoice === "object") {
@@ -870,7 +875,8 @@ function openaiToolChoiceToWs(toolChoice: unknown): WsToolChoice | undefined {
     if (fn?.name) return { toolName: String(fn.name) };
     if (tc.type === "auto") return { optionName: "auto" };
     if (tc.type === "none") return { optionName: "none" };
-    if (tc.type === "any" || tc.type === "required") return { optionName: "any" };
+    // "any"/"required" → "auto": see comment above re: swe-1.7 invalid_argument.
+    if (tc.type === "any" || tc.type === "required") return { optionName: "auto" };
   }
   return undefined;
 }
