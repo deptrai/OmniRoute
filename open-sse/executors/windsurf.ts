@@ -1184,6 +1184,35 @@ export class WindsurfExecutor extends BaseExecutor {
                   // is classified as SERVER_ERROR instead of QUOTA_EXHAUSTED.
                   const code = j.error.code ? `[${j.error.code}] ` : "";
                   hadError = code + j.error.message;
+                  // Dump full request payload when swe-1.7+ fails with invalid_argument in JSON trailer
+                  if (wsModel.includes("swe-1-7") && hadError.includes("invalid_argument")) {
+                    const dump = JSON.stringify({
+                      wsModel,
+                      wsMessages: wsMessages.map((m) => ({
+                        role: m.role,
+                        contentLen: typeof m.content === "string" ? m.content.length : 0,
+                        contentPreview:
+                          typeof m.content === "string" ? m.content.slice(0, 300) : "",
+                        toolCallId: m.toolCallId,
+                        toolCalls: m.toolCalls?.map((tc) => ({
+                          id: tc.id,
+                          name: tc.name,
+                          argsLen: tc.argumentsJson.length,
+                          argsPreview: tc.argumentsJson.slice(0, 200),
+                        })),
+                      })),
+                      wsTools: wsTools?.map((t) => ({
+                        name: t.name,
+                        descLen: t.description.length,
+                        schemaLen: t.jsonSchemaString.length,
+                      })),
+                      wsToolChoice,
+                      maxTokens: typeof b.max_tokens === "number" ? b.max_tokens : undefined,
+                      payloadLen: framedPayload.length,
+                      trailerJson: j,
+                    });
+                    console.warn(`[WS_DUMP4 swe-1.7] ${dump}`);
+                  }
                   return;
                 }
               } catch {
