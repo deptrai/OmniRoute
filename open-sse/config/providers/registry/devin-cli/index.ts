@@ -12,6 +12,8 @@ export const devin_cliProvider: RegistryEntry = {
   defaultContextLength: 200000,
   models: [
     // Cognition / SWE — default model family recommended for coding tasks
+    { id: "swe-1.7-fast", name: "SWE-1.7 Fast" },
+    { id: "swe-1.7", name: "SWE-1.7" },
     { id: "swe-1.6-fast", name: "SWE-1.6 Fast" },
     { id: "swe-1.6", name: "SWE-1.6" },
     { id: "swe-1.5-fast", name: "SWE-1.5 Fast" },

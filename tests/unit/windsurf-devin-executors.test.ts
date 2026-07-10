@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 describe("Windsurf MODEL_ALIAS_MAP", () => {
   const ALIAS_CASES: [string, string][] = [
     // SWE dot→dash conversions
+    ["swe-1.7-fast", "swe-1-7-fast"],
+    ["swe-1.7", "swe-1-7"],
     ["swe-1.6-fast", "swe-1-6-fast"],
     ["swe-1.6", "swe-1-6"],
     ["swe-1.5", "swe-1p5"],
