@@ -169,6 +169,10 @@ export const CREDITS_EXHAUSTED_SIGNALS = [
   // Without this signal, 502 is classified as SERVER_ERROR instead of QUOTA_EXHAUSTED,
   // so the connection is never marked credits_exhausted and account rotation never fires.
   "quota has been exhausted",
+  // Windsurf/Devin Connect protocol returns error body with code "resource_exhausted"
+  // when the weekly plan quota is used up. The message may say "an internal error
+  // occurred" but the gRPC code is the authoritative signal.
+  "resource_exhausted",
 ];
 
 // T11: Signals that indicate OAuth token is invalid/expired (not permanent deactivation)

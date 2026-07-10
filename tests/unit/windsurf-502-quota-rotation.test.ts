@@ -48,3 +48,22 @@ test("windsurf 502 without quota body: classifyProviderError still returns SERVE
 test("CREDITS_EXHAUSTED_SIGNALS contains 'quota has been exhausted'", () => {
   assert.ok(CREDITS_EXHAUSTED_SIGNALS.includes("quota has been exhausted"));
 });
+
+// Windsurf Connect protocol returns error body with code "resource_exhausted"
+// when weekly quota is used up. The message may say "an internal error occurred"
+// but the gRPC code is the authoritative quota signal.
+const WINDSURF_RESOURCE_EXHAUSTED_BODY =
+  '{"error":{"code":"resource_exhausted","message":"an internal error occurred (error ID: dd76582581c94f9da7900166bbd63122) (trace ID: eb7cead67aa8dfb6e50332aac9791d38)"}}';
+
+test("windsurf resource_exhausted body: isCreditsExhausted matches", () => {
+  assert.ok(isCreditsExhausted(WINDSURF_RESOURCE_EXHAUSTED_BODY), "should match resource_exhausted signal");
+});
+
+test("windsurf resource_exhausted body: classifyProviderError returns QUOTA_EXHAUSTED", () => {
+  const result = classifyProviderError(502, WINDSURF_RESOURCE_EXHAUSTED_BODY, "windsurf");
+  assert.equal(result, PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED);
+});
+
+test("CREDITS_EXHAUSTED_SIGNALS contains 'resource_exhausted'", () => {
+  assert.ok(CREDITS_EXHAUSTED_SIGNALS.includes("resource_exhausted"));
+});
