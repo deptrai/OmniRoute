@@ -1,3 +1,5 @@
+// tested with swe-1.7
+
 /**
  * WindsurfExecutor — routes requests to Windsurf (Devin CLI / Codeium) backend.
  *
@@ -10,7 +12,7 @@
  *   — placed in Metadata.api_key protobuf field of every request.
  *
  * Model IDs accepted by this executor (snake_case sent to Windsurf wire):
- *   Cognition SWE:  swe-1, swe-1-5, swe-1-6, swe-1-6-fast, swe-1-7, swe-1-7-fast, swe-1-lite
+ *   Cognition SWE:  swe-1, swe-1-5, swe-1-6, swe-1-6-fast, swe-1-7, swe-1-7-fast, swe-1-8, swe-1-8-fast, swe-1-lite
  *   Claude:         claude-4-5-sonnet, claude-4-5-opus, claude-4-sonnet, claude-4-opus,
  *                   claude-3-7-sonnet, claude-3-7-sonnet-thinking
  *   Gemini:         gemini-2-5-pro, gemini-2-5-flash, gemini-3-0-pro, gemini-3-0-flash
@@ -49,6 +51,8 @@ const WS_LOCALE = "en-US";
 // This map normalises dot→dash for newer models and handles legacy aliases.
 const MODEL_ALIAS_MAP: Record<string, string> = {
   // ── SWE ─────────────────────────────────────────────────────────────────
+  "swe-1.8-fast": "swe-1-8-fast",
+  "swe-1.8": "swe-1-8",
   "swe-1.7-fast": "swe-1-7-fast",
   "swe-1.7": "swe-1-7",
   "swe-1.6-fast": "swe-1-6-fast",
@@ -982,20 +986,6 @@ export class WindsurfExecutor extends BaseExecutor {
       typeof b.max_tokens === "number" ? b.max_tokens : undefined
     );
     const framedPayload = grpcWebFrame(protoPayload); // same format as gRPC-web data frame
-
-    // Debug: log payload details for swe-1.7 to diagnose intermittent invalid_argument
-    if (wsModel.includes("swe-1-7")) {
-      const msgDetails = wsMessages.map((m) => {
-        const role = m.role || "?";
-        const contentLen = typeof m.content === "string" ? m.content.length : 0;
-        const tcCount = m.toolCalls?.length ?? 0;
-        const hasToolCallId = m.toolCallId ? 1 : 0;
-        return `${role}:${contentLen}c${tcCount > 0 ? `/${tcCount}tc` : ""}${hasToolCallId ? "/tr" : ""}`;
-      });
-      console.warn(
-        `[WS_DEBUG swe-1.7] payload=${framedPayload.length}B msgs=[${msgDetails.join(", ")}] tools=${wsTools?.length ?? 0} toolChoice=${wsToolChoice?.optionName ?? wsToolChoice?.toolName ?? "none"} maxTokens=${typeof b.max_tokens === "number" ? b.max_tokens : "none"}`
-      );
-    }
 
     const url = this.buildUrl();
     const headers = this.buildHeaders(credentials);
