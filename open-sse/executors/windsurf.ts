@@ -993,7 +993,7 @@ export class WindsurfExecutor extends BaseExecutor {
 
     log?.info?.(
       "WS",
-      `Windsurf → ${wsModel} (${wsMessages.length} messages${hasTools ? `, ${wsTools!.length} tools native` : ""})`
+      `Windsurf → ${wsModel} (${wsMessages.length} messages${hasTools ? `, ${wsTools!.length} tools native` : ""}) payload=${framedPayload.length}b`
     );
 
     const upstream = await fetch(url, {
