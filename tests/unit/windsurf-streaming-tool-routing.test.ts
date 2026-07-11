@@ -2,13 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { __test, encodeVarintField } from "../../open-sse/executors/windsurf.ts";
 
-const {
-  transformToSSE,
-  decodeGetChatMessageResponse,
-  encodeString,
-  encodeMessage,
-  grpcWebFrame,
-} = __test;
+const { transformToSSE, decodeGetChatMessageResponse, encodeString, encodeMessage, grpcWebFrame } =
+  __test;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -31,7 +26,14 @@ function buildToolCallPayload(id: string, name: string, args: string): Uint8Arra
   return concat(parts);
 }
 
-function buildResponsePayload(fields: { text?: string; thinking?: string; toolCalls?: { id: string; name: string; args: string }[]; stopReason?: number; inputTokens?: number; outputTokens?: number }): Uint8Array {
+function buildResponsePayload(fields: {
+  text?: string;
+  thinking?: string;
+  toolCalls?: { id: string; name: string; args: string }[];
+  stopReason?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+}): Uint8Array {
   const parts: Uint8Array[] = [];
   if (fields.text !== undefined) parts.push(encodeString(3, fields.text));
   if (fields.thinking !== undefined) parts.push(encodeString(9, fields.thinking));
@@ -44,7 +46,8 @@ function buildResponsePayload(fields: { text?: string; thinking?: string; toolCa
   if (fields.inputTokens !== undefined || fields.outputTokens !== undefined) {
     const usageParts: Uint8Array[] = [];
     if (fields.inputTokens !== undefined) usageParts.push(encodeVarintField(2, fields.inputTokens));
-    if (fields.outputTokens !== undefined) usageParts.push(encodeVarintField(3, fields.outputTokens));
+    if (fields.outputTokens !== undefined)
+      usageParts.push(encodeVarintField(3, fields.outputTokens));
     parts.push(encodeMessage(7, concat(usageParts)));
   }
   return concat(parts);
@@ -162,8 +165,11 @@ test("T1: tool call args streamed across multiple frames (same index)", async ()
   }
 });
 
-test("T1: phantom tool call (id + name, NO args) is suppressed", async () => {
-  // GLM-5.2-max bug: emits tool call header with empty args, never sends args
+test("T1: phantom tool call (id + name, NO args) is flushed with empty args at stream end", async () => {
+  // GLM-5.2-max bug: emits tool call header with empty args, never sends args.
+  // The fix flushes buffered tool calls with "{}" args at stream end so
+  // finish_reason="tool_calls" matches the emitted content (previously
+  // sawToolCalls was true but no tool_use block was emitted → "could not be parsed").
   const phantomPayload = buildResponsePayload({
     toolCalls: [{ id: "call_phantom", name: "Agent", args: "" }],
     stopReason: 1,
@@ -172,11 +178,10 @@ test("T1: phantom tool call (id + name, NO args) is suppressed", async () => {
   const resp = transformToSSE.call({}, mockResponse(body), "glm-5.2-max", true, true);
   const chunks = await readSSE(resp);
   const tcDeltas = extractToolCallDeltas(chunks);
-  // Phantom tool call should NOT be emitted — no tool_calls in SSE output
-  assert.equal(tcDeltas.length, 0, "phantom tool call suppressed (no args → no emission)");
-  // Finish reason should be "stop" not "tool_calls" since no tool calls were emitted
-  // Actually sawToolCalls is set to true if deltaToolCalls parsed, even if not emitted.
-  // The key assertion is: no tool_calls deltas in SSE output.
+  // Phantom tool call should be flushed with "{}" args
+  assert.equal(tcDeltas.length, 1, "phantom tool call flushed with empty args");
+  assert.equal(tcDeltas[0].function.name, "Agent");
+  assert.equal(tcDeltas[0].function.arguments, "{}");
 });
 
 test("T1: phantom tool call followed by real tool call — only real one emitted", async () => {
@@ -254,7 +259,10 @@ test("T1: text + tool call in same frame — both emitted", async () => {
   const textDeltas = chunks
     .filter((c) => c.choices?.[0]?.delta?.content)
     .map((c) => c.choices[0].delta.content);
-  assert.ok(textDeltas.some((t) => t.includes("Let me run")), "text content emitted");
+  assert.ok(
+    textDeltas.some((t) => t.includes("Let me run")),
+    "text content emitted"
+  );
   // Should have tool call delta
   const tcDeltas = extractToolCallDeltas(chunks);
   assert.equal(tcDeltas.length, 1);
@@ -277,7 +285,10 @@ test("T1: hasTools=false — tool call fields ignored", async () => {
   const textDeltas = chunks
     .filter((c) => c.choices?.[0]?.delta?.content)
     .map((c) => c.choices[0].delta.content);
-  assert.ok(textDeltas.some((t) => t.includes("Hello")), "text still emitted");
+  assert.ok(
+    textDeltas.some((t) => t.includes("Hello")),
+    "text still emitted"
+  );
 });
 
 test("T1: empty response with stop_reason — emits finish chunk", async () => {
@@ -368,7 +379,10 @@ test("T5: connect-protocol-error in trailer — error emitted", async () => {
   const textDeltas = chunks
     .filter((c) => c.choices?.[0]?.delta?.content)
     .map((c) => c.choices[0].delta.content);
-  assert.ok(textDeltas.some((t) => t.includes("Partial")), "partial text emitted");
+  assert.ok(
+    textDeltas.some((t) => t.includes("Partial")),
+    "partial text emitted"
+  );
   // Should have a finish chunk (stop, since content was streamed)
   const finish = getFinishReason(chunks);
   assert.equal(finish, "stop", "finish_reason=stop when text was streamed before error");

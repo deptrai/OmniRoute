@@ -1042,6 +1042,7 @@ export class WindsurfExecutor extends BaseExecutor {
         let completionTokens = 0;
         let hadError: string | null = null;
         let sawToolCalls = false;
+        let emittedToolCalls = false; // only true when a tool call is actually emitted to SSE
         // Track tool calls by stable key (id or name) → { index, started }.
         // Windsurf streams tool call arguments across multiple delta_tool_calls
         // frames. Each frame for the SAME tool call must use the SAME OpenAI
@@ -1293,6 +1294,7 @@ export class WindsurfExecutor extends BaseExecutor {
                   };
                 }
 
+                emittedToolCalls = true;
                 emit(
                   `data: ${JSON.stringify({
                     id: responseId,
@@ -1412,13 +1414,58 @@ export class WindsurfExecutor extends BaseExecutor {
             }
           }
 
-          // Finish chunk — use "tool_calls" finish_reason if we emitted any tool calls
+          // Flush buffered tool calls that were deferred (phantom headers with
+          // name but no args). If the model sent a tool call header (id + name)
+          // but never sent arguments, we emit it with empty "{}" arguments so
+          // the downstream translator creates a proper tool_use content block.
+          // Without this, sawToolCalls would be true but no tool_use block is
+          // emitted, causing finish_reason="tool_calls" with no tool call data
+          // → Claude Code "tool call could not be parsed" error.
+          if (!emittedToolCalls && sawToolCalls) {
+            for (const [, entry] of toolCallMap) {
+              if (!entry.started && entry.name) {
+                ensureRole();
+                emittedToolCalls = true;
+                emit(
+                  `data: ${JSON.stringify({
+                    id: responseId,
+                    object: "chat.completion.chunk",
+                    created,
+                    model,
+                    choices: [
+                      {
+                        index: 0,
+                        delta: {
+                          tool_calls: [
+                            {
+                              index: entry.index,
+                              id: `call-${Date.now()}-${entry.index}`,
+                              type: "function",
+                              function: { name: entry.name, arguments: "{}" },
+                            },
+                          ],
+                        },
+                        finish_reason: null,
+                      },
+                    ],
+                  })}\n\n`
+                );
+              }
+            }
+          }
+
+          // Finish chunk — use "tool_calls" finish_reason only if we actually
+          // emitted tool call data to the SSE stream. Using sawToolCalls here
+          // would set "tool_calls" even when all tool calls were deferred and
+          // never emitted, causing "tool call could not be parsed" downstream.
           const finishPayload: Record<string, unknown> = {
             id: responseId,
             object: "chat.completion.chunk",
             created,
             model,
-            choices: [{ index: 0, delta: {}, finish_reason: sawToolCalls ? "tool_calls" : "stop" }],
+            choices: [
+              { index: 0, delta: {}, finish_reason: emittedToolCalls ? "tool_calls" : "stop" },
+            ],
           };
           if (promptTokens > 0 || completionTokens > 0) {
             finishPayload.usage = {
@@ -1462,6 +1509,7 @@ export const __test = {
   encodeString,
   encodeMessage,
   encodeField,
+  encodeVarintField,
   encodeBoolField,
   buildChatToolCall,
   buildChatMessagePrompt,
