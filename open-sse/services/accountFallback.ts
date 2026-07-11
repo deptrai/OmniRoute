@@ -1579,6 +1579,19 @@ export function checkFallbackError(
     };
   }
 
+  // Windsurf swe-1.7+ returns 502 with invalid_argument intermittently (server-side
+  // validation bug). This is NOT a transient server error — retrying the same
+  // request with the same account will fail identically. Return shouldFallback=false
+  // so chatCore.ts can trigger model family fallback (swe-1.7 → swe-1.6) instead of
+  // burning retry attempts on a deterministic failure.
+  if (status === HTTP_STATUS.BAD_GATEWAY && errorStr.toLowerCase().includes("invalid_argument")) {
+    return {
+      shouldFallback: false,
+      cooldownMs: 0,
+      reason: RateLimitReason.SERVER_ERROR,
+    };
+  }
+
   if (status === HTTP_STATUS.NOT_ACCEPTABLE || retryableStatuses.has(status)) {
     return buildRetryableFallback(RateLimitReason.SERVER_ERROR);
   }

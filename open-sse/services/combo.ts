@@ -2418,9 +2418,15 @@ export async function handleComboChat({
 
           // Check if this is a transient error worth retrying on same model.
           // A token-limit 429 is terminal for the client — never retry it.
+          // Windsurf 502 invalid_argument is deterministic (server-side validation
+          // bug for certain request shapes) — retrying wastes attempts and blocks
+          // model family fallback. Skip retry so chatCore.ts can trigger swe-1.7→swe-1.6.
+          const isWindsurfInvalidArg =
+            result.status === 502 && errorText.toLowerCase().includes("invalid_argument");
           const isTransient =
             !isStreamReadinessFailure &&
             !isTokenLimitBreach &&
+            !isWindsurfInvalidArg &&
             [408, 429, 500, 502, 503, 504].includes(result.status);
           if (retry < maxRetries && isTransient && !providerExhausted) {
             // Record model lockout immediately on the first transient failure —
@@ -3284,9 +3290,13 @@ async function handleRoundRobinCombo({
 
         // Transient error → retry same model.
         // A token-limit 429 is terminal for the client — never retry it.
+        // Windsurf 502 invalid_argument is deterministic — skip retry for model family fallback.
+        const isWindsurfInvalidArgRR =
+          result.status === 502 && errorText.toLowerCase().includes("invalid_argument");
         const isTransient =
           !isStreamReadinessFailure &&
           !isTokenLimitBreach &&
+          !isWindsurfInvalidArgRR &&
           [408, 429, 500, 502, 503, 504].includes(result.status);
         if (retry < maxRetries && isTransient && !providerExhausted) {
           continue;
