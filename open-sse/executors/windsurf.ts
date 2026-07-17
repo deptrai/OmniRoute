@@ -641,8 +641,12 @@ type OpenAIMessage = {
 //
 // Pattern adapted from bytedance/deer-flow loop_detection_middleware.
 const LOOP_WARN_THRESHOLD = 3; // inject warning after 3 identical calls
-const LOOP_HARD_LIMIT = 5; // inject hard-stop after 5 identical calls
+const LOOP_HARD_LIMIT = 4; // inject hard-stop after 4 identical calls
 const LOOP_WINDOW_SIZE = 20; // track last N tool calls
+// Per-tool frequency: catches same tool TYPE called many times with different args
+// (e.g. 15x TaskCreate with different content, 20x read different files)
+const LOOP_TOOL_FREQ_WARN = 12; // warn after 12 calls to same tool type
+const LOOP_TOOL_FREQ_HARD = 18; // hard-stop after 18 calls to same tool type
 
 function stableToolCallKey(name: string, argsJson: string): string {
   // Normalize args: parse JSON, extract salient fields, re-serialize.
@@ -666,10 +670,21 @@ function stableToolCallKey(name: string, argsJson: string): string {
     return `${name}:${argsJson}`;
   }
 
-  // For read tools, bucket by path only (ignore line ranges)
-  if (name === "read" || name === "read_file") {
+  // For read tools, bucket by path + line range.
+  // Chunked reads (same path, different ranges) are NOT a loop.
+  // Only same path + same range (or no range) 3x = loop.
+  if (name === "read" || name === "read_file" || name === "Read") {
     const path = String(args.path || args.file_path || args.file || "");
-    return `${name}:read:${path}`;
+    const start = String(args.start_line ?? args.startLine ?? args.offset ?? "");
+    const end = String(args.end_line ?? args.endLine ?? args.limit ?? "");
+    // Bucket line ranges in chunks of 50 to avoid noise from off-by-one
+    let rangeKey = "";
+    if (start || end) {
+      const s = Math.floor((Number(start) || 1 - 1) / 50) * 50;
+      const e = Math.floor((Number(end) || 0) / 50) * 50;
+      rangeKey = `:${s}-${e}`;
+    }
+    return `${name}:read:${path}${rangeKey}`;
   }
 
   // For bash/exec, bucket by command prefix (first 100 chars)
@@ -678,7 +693,8 @@ function stableToolCallKey(name: string, argsJson: string): string {
     name === "exec" ||
     name === "run_command" ||
     name === "terminal" ||
-    name === "shell"
+    name === "shell" ||
+    name === "Bash"
   ) {
     const cmd = String(args.command || args.cmd || "");
     return `${name}:exec:${cmd.substring(0, 100)}`;
@@ -736,7 +752,10 @@ function stableToolCallKey(name: string, argsJson: string): string {
 
 function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
   // Collect all tool_calls from assistant messages in order.
+  // Track both stable keys (for exact-duplicate detection) and tool names
+  // (for per-tool frequency detection).
   const toolCallKeys: string[] = [];
+  const toolNames: string[] = [];
   for (const m of messages) {
     if (m.role !== "assistant") continue;
     if (!Array.isArray(m.tool_calls) || m.tool_calls.length === 0) continue;
@@ -744,27 +763,51 @@ function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
       const name = tc.function?.name || "";
       const args = tc.function?.arguments || "{}";
       toolCallKeys.push(stableToolCallKey(name, args));
+      toolNames.push(name);
     }
   }
 
   if (toolCallKeys.length === 0) return null;
 
   // Sliding window: count duplicates in last LOOP_WINDOW_SIZE calls.
-  const window = toolCallKeys.slice(-LOOP_WINDOW_SIZE);
-  const counts = new Map<string, number>();
-  for (const key of window) {
-    counts.set(key, (counts.get(key) || 0) + 1);
+  const windowKeys = toolCallKeys.slice(-LOOP_WINDOW_SIZE);
+  const windowNames = toolNames.slice(-LOOP_WINDOW_SIZE);
+
+  // 1. Exact-duplicate detection: same tool + same args
+  const keyCounts = new Map<string, number>();
+  for (const key of windowKeys) {
+    keyCounts.set(key, (keyCounts.get(key) || 0) + 1);
+  }
+  let maxKeyCount = 0;
+  let maxKey = "";
+  for (const [key, count] of keyCounts) {
+    if (count > maxKeyCount) {
+      maxKeyCount = count;
+      maxKey = key;
+    }
   }
 
-  // Find the most repeated call.
-  let maxCount = 0;
-  for (const count of counts.values()) {
-    if (count > maxCount) maxCount = count;
+  // 2. Per-tool frequency detection: same tool TYPE called many times
+  // (catches loops where args differ slightly but tool is overused)
+  const nameCounts = new Map<string, number>();
+  for (const name of windowNames) {
+    nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+  }
+  let maxNameCount = 0;
+  let maxName = "";
+  for (const [name, count] of nameCounts) {
+    if (count > maxNameCount) {
+      maxNameCount = count;
+      maxName = name;
+    }
   }
 
-  if (maxCount < LOOP_WARN_THRESHOLD) return null;
+  // Determine which detection triggered
+  const exactDupTriggered = maxKeyCount >= LOOP_WARN_THRESHOLD;
+  const freqTriggered = maxNameCount >= LOOP_TOOL_FREQ_WARN;
+  if (!exactDupTriggered && !freqTriggered) return null;
 
-  // Build a state summary of all tool calls (helps model understand context).
+  // Build state summary of repeated calls
   const toolSummary = new Map<string, number>();
   for (const key of toolCallKeys) {
     toolSummary.set(key, (toolSummary.get(key) || 0) + 1);
@@ -773,23 +816,36 @@ function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
     .filter(([, count]) => count >= 2)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
-
   const summaryLines = repeatedCalls.map(([key, count]) => `  - ${key} (called ${count}x)`);
   const summaryText =
     summaryLines.length > 0 ? `\n\nRepeated tool calls detected:\n${summaryLines.join("\n")}` : "";
 
-  if (maxCount >= LOOP_HARD_LIMIT) {
+  // Hard-stop: exact dup >= HARD_LIMIT OR freq >= FREQ_HARD
+  if (maxKeyCount >= LOOP_HARD_LIMIT || maxNameCount >= LOOP_TOOL_FREQ_HARD) {
+    const reason =
+      maxKeyCount >= LOOP_HARD_LIMIT
+        ? `the same tool ${maxKeyCount} times with identical arguments`
+        : `${maxName} ${maxNameCount} times in the last ${LOOP_WINDOW_SIZE} calls`;
     return (
-      `[FORCED STOP] You have called the same tool ${maxCount} times with identical arguments. ` +
+      `[FORCED STOP] You have called ${reason}. ` +
       `This is a loop — STOP calling tools immediately and produce your final answer. ` +
       `Summarize what you have accomplished so far.${summaryText}`
     );
   }
 
+  // Warning level
+  if (exactDupTriggered) {
+    return (
+      `[LOOP DETECTED] You are repeating the same tool calls (${maxKeyCount}x identical: ${maxKey}). ` +
+      `You have already performed these actions — do NOT call them again. ` +
+      `Proceed to your next step or produce your final answer.${summaryText}`
+    );
+  }
+  // Frequency warning
   return (
-    `[LOOP DETECTED] You are repeating the same tool calls (${maxCount}x identical). ` +
-    `You have already performed these actions — do NOT call them again. ` +
-    `Proceed to your next step or produce your final answer.${summaryText}`
+    `[LOOP DETECTED] You have called ${maxName} ${maxNameCount} times in the last ${LOOP_WINDOW_SIZE} calls. ` +
+    `This is excessive — wrap up and produce your final answer. ` +
+    `If you still need to call tools, use a DIFFERENT tool.${summaryText}`
   );
 }
 
