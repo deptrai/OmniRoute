@@ -629,6 +629,170 @@ type OpenAIMessage = {
   tool_calls?: OpenAIToolCall[];
 };
 
+// ─── Loop detection for Windsurf models ─────────────────────────────────────
+// Windsurf upstream rejects role=assistant (502), so openAIMessagesToWs
+// converts ALL messages to source=USER. This means models like swe-1.7
+// cannot distinguish their own previous tool_calls from user messages,
+// causing them to repeat identical calls indefinitely.
+//
+// detectToolCallLoops scans assistant messages for duplicate tool_calls
+// (same name + same arguments) and returns a warning string to inject
+// as a final user message when repetition is detected.
+//
+// Pattern adapted from bytedance/deer-flow loop_detection_middleware.
+const LOOP_WARN_THRESHOLD = 3; // inject warning after 3 identical calls
+const LOOP_HARD_LIMIT = 5; // inject hard-stop after 5 identical calls
+const LOOP_WINDOW_SIZE = 20; // track last N tool calls
+
+function stableToolCallKey(name: string, argsJson: string): string {
+  // Normalize args: parse JSON, extract salient fields, re-serialize.
+  // This buckets calls that differ only in noise (timestamps, IDs) but
+  // keeps content-sensitive calls distinct for write/edit tools.
+  let args: Record<string, unknown> = {};
+  try {
+    args = JSON.parse(argsJson || "{}");
+  } catch {
+    return `${name}:${argsJson}`;
+  }
+
+  // For write/edit tools, hash full args (content-sensitive)
+  if (
+    name === "write" ||
+    name === "edit" ||
+    name === "str_replace" ||
+    name === "write_file" ||
+    name === "str_replace_editor"
+  ) {
+    return `${name}:${argsJson}`;
+  }
+
+  // For read tools, bucket by path only (ignore line ranges)
+  if (name === "read" || name === "read_file") {
+    const path = String(args.path || args.file_path || args.file || "");
+    return `${name}:read:${path}`;
+  }
+
+  // For bash/exec, bucket by command prefix (first 100 chars)
+  if (
+    name === "bash" ||
+    name === "exec" ||
+    name === "run_command" ||
+    name === "terminal" ||
+    name === "shell"
+  ) {
+    const cmd = String(args.command || args.cmd || "");
+    return `${name}:exec:${cmd.substring(0, 100)}`;
+  }
+
+  // For task/todo tools, bucket by name + primary field
+  if (
+    name === "TaskCreate" ||
+    name === "TaskUpdate" ||
+    name === "TaskList" ||
+    name === "todo_write" ||
+    name === "TodoWrite"
+  ) {
+    // TaskCreate: hash by content prefix (first 80 chars of each task)
+    if (name === "TaskCreate" || name === "todo_write" || name === "TodoWrite") {
+      const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+      const summary = tasks
+        .map((t: unknown) => String((t as Record<string, unknown>)?.content || "").substring(0, 80))
+        .join("|");
+      return `${name}:tasks:${summary}`;
+    }
+    // TaskUpdate: hash by taskId + status
+    if (name === "TaskUpdate") {
+      const tid = String(args.taskId || args.task_id || "");
+      const st = String(args.status || "");
+      return `${name}:update:${tid}:${st}`;
+    }
+    return `${name}:${argsJson.substring(0, 100)}`;
+  }
+
+  // Default: hash by name + salient fields
+  const salientFields = [
+    "path",
+    "url",
+    "query",
+    "command",
+    "pattern",
+    "glob",
+    "cmd",
+    "file",
+    "file_path",
+  ];
+  const salient: Record<string, unknown> = {};
+  for (const f of salientFields) {
+    if (args[f] !== undefined && args[f] !== null) {
+      salient[f] = String(args[f]).substring(0, 200);
+    }
+  }
+  const keys = Object.keys(salient);
+  if (keys.length > 0) {
+    return `${name}:${JSON.stringify(salient, keys.sort())}`;
+  }
+  return `${name}:${argsJson.substring(0, 200)}`;
+}
+
+function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
+  // Collect all tool_calls from assistant messages in order.
+  const toolCallKeys: string[] = [];
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    if (!Array.isArray(m.tool_calls) || m.tool_calls.length === 0) continue;
+    for (const tc of m.tool_calls) {
+      const name = tc.function?.name || "";
+      const args = tc.function?.arguments || "{}";
+      toolCallKeys.push(stableToolCallKey(name, args));
+    }
+  }
+
+  if (toolCallKeys.length === 0) return null;
+
+  // Sliding window: count duplicates in last LOOP_WINDOW_SIZE calls.
+  const window = toolCallKeys.slice(-LOOP_WINDOW_SIZE);
+  const counts = new Map<string, number>();
+  for (const key of window) {
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  // Find the most repeated call.
+  let maxCount = 0;
+  for (const count of counts.values()) {
+    if (count > maxCount) maxCount = count;
+  }
+
+  if (maxCount < LOOP_WARN_THRESHOLD) return null;
+
+  // Build a state summary of all tool calls (helps model understand context).
+  const toolSummary = new Map<string, number>();
+  for (const key of toolCallKeys) {
+    toolSummary.set(key, (toolSummary.get(key) || 0) + 1);
+  }
+  const repeatedCalls = [...toolSummary.entries()]
+    .filter(([, count]) => count >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  const summaryLines = repeatedCalls.map(([key, count]) => `  - ${key} (called ${count}x)`);
+  const summaryText =
+    summaryLines.length > 0 ? `\n\nRepeated tool calls detected:\n${summaryLines.join("\n")}` : "";
+
+  if (maxCount >= LOOP_HARD_LIMIT) {
+    return (
+      `[FORCED STOP] You have called the same tool ${maxCount} times with identical arguments. ` +
+      `This is a loop — STOP calling tools immediately and produce your final answer. ` +
+      `Summarize what you have accomplished so far.${summaryText}`
+    );
+  }
+
+  return (
+    `[LOOP DETECTED] You are repeating the same tool calls (${maxCount}x identical). ` +
+    `You have already performed these actions — do NOT call them again. ` +
+    `Proceed to your next step or produce your final answer.${summaryText}`
+  );
+}
+
 function openAIMessagesToWs(messages: OpenAIMessage[]): WsChatMessage[] {
   const out: WsChatMessage[] = [];
   for (const m of messages) {
@@ -989,6 +1153,18 @@ export class WindsurfExecutor extends BaseExecutor {
 
     if (wsMessages.length === 0) {
       wsMessages.push({ role: "user", content: "" });
+    }
+
+    // Loop detection: scan assistant messages for duplicate tool_calls.
+    // Windsurf converts all messages to source=USER, so models like swe-1.7
+    // cannot distinguish their own previous tool_calls from user messages,
+    // causing them to repeat identical calls (e.g. TaskCreate, TaskUpdate,
+    // Read same file). This injects a warning when duplicates are detected.
+    // Pattern adapted from bytedance/deer-flow loop_detection_middleware.
+    const loopWarning = detectToolCallLoops(rawMessages);
+    if (loopWarning) {
+      wsMessages.push({ role: "user", content: loopWarning });
+      log?.info?.("WS", `[WINDSURF_LOOP] ${loopWarning.substring(0, 120)}`);
     }
 
     // Build the protobuf request and frame it for Connect streaming protocol.
