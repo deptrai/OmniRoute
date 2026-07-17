@@ -23,6 +23,7 @@
 
 import { BaseExecutor, mergeUpstreamExtraHeaders, type ExecuteInput } from "./base.ts";
 import { PROVIDERS } from "../config/constants.ts";
+import { sanitizeOpenAITools } from "../services/toolSchemaSanitizer.ts";
 import { randomUUID } from "node:crypto";
 
 // ─── Windsurf API constants ──────────────────────────────────────────────────
@@ -686,6 +687,7 @@ type OpenAITool = {
 // full parameter structure can't be sent. The model can still call the tool with
 // best-guess arguments, which is far better than not knowing the tool exists.
 const WS_MAX_TOOL_DESC_LEN = 200;
+const WS_MAX_TOOL_SCHEMA_LEN = 2500; // per-tool schema cap — prevents 502 invalid_argument on huge nested schemas (e.g. DesignSync)
 const WS_TOOLS_SIZE_BUDGET = 52000; // under the ~57KB hard limit
 const WS_TIER2_THRESHOLD = 30000; // switch to stripped schema when remaining budget drops below this
 const WS_TIER3_THRESHOLD = 10000; // switch to name-only when remaining budget drops below this
@@ -756,6 +758,12 @@ function sanitizeJsonSchema(node: unknown): unknown {
 
 function openaiToolsToWs(tools: unknown): WsToolDefinition[] | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
+  // Apply the same schema sanitization the /v1/chat/completions path uses.
+  // The /v1/messages (Claude-format) path translates tools to OpenAI format
+  // after sanitizeChatRequestBody has already run, so tuple-form `items` and
+  // other strict-validator-unfriendly constructs reach the Windsurf executor
+  // unsanitized and cause upstream 502 invalid_argument.
+  const allTools = sanitizeOpenAITools(tools) as OpenAITool[];
   const out: WsToolDefinition[] = [];
   const keptNames = new Set<string>();
   let totalSize = 0;
@@ -784,8 +792,8 @@ function openaiToolsToWs(tools: unknown): WsToolDefinition[] | undefined {
     "TodoWrite",
     "NotebookEdit",
     "LS",
+    "Skill",
   ]);
-  const allTools = tools as OpenAITool[];
   const criticalBuiltinTools = allTools.filter(
     (t) => t?.function?.name && WS_CRITICAL_BUILTINS.has(t.function.name)
   );
@@ -821,6 +829,14 @@ function openaiToolsToWs(tools: unknown): WsToolDefinition[] | undefined {
         schemaStr = t.function.parameters ? JSON.stringify(sanitized) : "{}";
       } catch {
         schemaStr = "{}";
+      }
+      // Per-tool schema cap: the upstream Windsurf API rejects individual tool
+      // definitions with very large nested schemas (e.g. DesignSync) with a
+      // generic 502 invalid_argument. Strip to type-only when over the cap.
+      if (schemaStr.length > WS_MAX_TOOL_SCHEMA_LEN) {
+        schemaStr = '{"type":"object"}';
+        tier2Count++;
+        tier1Count--;
       }
     } else if (remaining > WS_TIER3_THRESHOLD) {
       // Tier 2: stripped schema (type only) + shorter description

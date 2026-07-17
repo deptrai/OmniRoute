@@ -276,8 +276,12 @@ function processMessages(
 ): { messages: MessageLike[]; replacedCount: number } {
   let replacedCount = 0;
 
-  const result = messages.map((msg) => {
-    if (msg.role === "system") return { ...msg };
+  const result = messages.map((msg, index) => {
+    // Keep the first system message (typically the primary system prompt) intact,
+    // but allow compression of later system messages such as Claude Code's
+    // interleaved system-reminders, which would otherwise remain large and blow
+    // up the prompt after providers convert them to user messages.
+    if ((msg.role === "system" || msg.role === "developer") && index === 0) return { ...msg };
 
     if (typeof msg.content === "string") {
       const { text, replaced } = maybeCcrReplace(msg.content, minChars, principalId, rampFactor);
