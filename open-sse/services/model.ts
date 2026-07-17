@@ -46,6 +46,10 @@ ALIAS_TO_PROVIDER_ID["xiaomi"] = "xiaomi-mimo";
 // prefix is "llamacpp". Register it so parseModel("llamacpp/<model>") resolves
 // provider = "llama-cpp" instead of the identity fallback ("llamacpp").
 ALIAS_TO_PROVIDER_ID["llamacpp"] = "llama-cpp";
+// zai/ is an alternative user-facing prefix for the windsurf provider.
+// The canonical ID stays "windsurf" (executor/oauth/mitm use it); this alias
+// lets users address models as zai/swe-1.7, zai/glm-5.2, etc.
+ALIAS_TO_PROVIDER_ID["zai"] = "windsurf";
 
 // Provider-scoped legacy model aliases. Used to normalize provider/model inputs
 // and keep backward compatibility when upstream IDs change.
