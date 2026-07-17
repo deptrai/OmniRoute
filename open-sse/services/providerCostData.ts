@@ -24,6 +24,7 @@ export const KNOWN_MODEL_PRICING: Record<string, ModelPricing> = {
   "glm-5.1": { inputCostPer1M: 0.5, outputCostPer1M: 0.5, isFree: false },
   "minimax-m2.1": { inputCostPer1M: 0.2, outputCostPer1M: 0.2, isFree: false },
   "grok-4-fast": { inputCostPer1M: 0.2, outputCostPer1M: 0.5, isFree: false },
+  "grok-4.5": { inputCostPer1M: 2.0, outputCostPer1M: 6.0, isFree: false },
   "kimi-k2-thinking": { inputCostPer1M: 0, outputCostPer1M: 0, isFree: true },
   "qwen3-coder-plus": { inputCostPer1M: 0, outputCostPer1M: 0, isFree: true },
   "longcat-2.0": {

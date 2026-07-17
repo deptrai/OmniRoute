@@ -12,6 +12,12 @@ export const grok_cliProvider: RegistryEntry = {
   passthroughModels: true,
   models: [
     {
+      id: "grok-4.5",
+      name: "Grok 4.5",
+      contextLength: 500000,
+      unsupportedParams: ["presencePenalty", "frequencyPenalty", "logprobs", "topLogprobs"],
+    },
+    {
       id: "grok-build",
       name: "Grok Build",
       contextLength: 128000,

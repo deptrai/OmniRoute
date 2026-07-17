@@ -380,5 +380,13 @@ export const DEFAULT_PRICING_FRONTIER = {
       reasoning: 2.25,
       cache_creation: 0.2,
     },
+    // Grok 4.5 — flagship (2026-07); context 500k, reasoning on by default
+    "grok-4.5": {
+      input: 2.0,
+      output: 6.0,
+      cached: 0.5,
+      reasoning: 9.0,
+      cache_creation: 2.0,
+    },
   },
 };
