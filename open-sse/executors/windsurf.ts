@@ -640,13 +640,12 @@ type OpenAIMessage = {
 // as a final user message when repetition is detected.
 //
 // Pattern adapted from bytedance/deer-flow loop_detection_middleware.
-const LOOP_WARN_THRESHOLD = 3; // inject warning after 3 identical calls
-const LOOP_HARD_LIMIT = 4; // inject hard-stop after 4 identical calls
+const LOOP_WARN_THRESHOLD = 2; // inject warning after 2 identical calls
+const LOOP_HARD_LIMIT = 3; // inject hard-stop after 3 identical calls
 const LOOP_WINDOW_SIZE = 20; // track last N tool calls
 // Per-tool frequency: catches same tool TYPE called many times with different args
-// (e.g. 15x TaskCreate with different content, 20x read different files)
-const LOOP_TOOL_FREQ_WARN = 12; // warn after 12 calls to same tool type
-const LOOP_TOOL_FREQ_HARD = 18; // hard-stop after 18 calls to same tool type
+const LOOP_TOOL_FREQ_WARN = 8; // warn after 8 calls to same tool type
+const LOOP_TOOL_FREQ_HARD = 12; // hard-stop after 12 calls to same tool type
 
 function stableToolCallKey(name: string, argsJson: string): string {
   // Normalize args: parse JSON, extract salient fields, re-serialize.
@@ -756,6 +755,7 @@ function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
   // (for per-tool frequency detection).
   const toolCallKeys: string[] = [];
   const toolNames: string[] = [];
+  const readFiles = new Set<string>(); // track files already read
   for (const m of messages) {
     if (m.role !== "assistant") continue;
     if (!Array.isArray(m.tool_calls) || m.tool_calls.length === 0) continue;
@@ -764,6 +764,14 @@ function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
       const args = tc.function?.arguments || "{}";
       toolCallKeys.push(stableToolCallKey(name, args));
       toolNames.push(name);
+      // Track read files for state summary
+      if (name === "read" || name === "read_file" || name === "Read") {
+        try {
+          const parsed = JSON.parse(args || "{}");
+          const path = String(parsed.path || parsed.file_path || parsed.file || "");
+          if (path) readFiles.add(path);
+        } catch {}
+      }
     }
   }
 
@@ -788,7 +796,6 @@ function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
   }
 
   // 2. Per-tool frequency detection: same tool TYPE called many times
-  // (catches loops where args differ slightly but tool is overused)
   const nameCounts = new Map<string, number>();
   for (const name of windowNames) {
     nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
@@ -820,32 +827,45 @@ function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
   const summaryText =
     summaryLines.length > 0 ? `\n\nRepeated tool calls detected:\n${summaryLines.join("\n")}` : "";
 
+  // Build file-read summary (helps model avoid re-reading)
+  let filesReadText = "";
+  if (readFiles.size > 0) {
+    const fileList = [...readFiles]
+      .slice(-15)
+      .map((f) => `  - ${f}`)
+      .join("\n");
+    filesReadText = `\n\nFiles you have ALREADY READ (do NOT read them again):\n${fileList}`;
+  }
+
   // Hard-stop: exact dup >= HARD_LIMIT OR freq >= FREQ_HARD
   if (maxKeyCount >= LOOP_HARD_LIMIT || maxNameCount >= LOOP_TOOL_FREQ_HARD) {
     const reason =
       maxKeyCount >= LOOP_HARD_LIMIT
-        ? `the same tool ${maxKeyCount} times with identical arguments`
+        ? `the same tool ${maxKeyCount} times with identical arguments (${maxKey})`
         : `${maxName} ${maxNameCount} times in the last ${LOOP_WINDOW_SIZE} calls`;
     return (
       `[FORCED STOP] You have called ${reason}. ` +
       `This is a loop — STOP calling tools immediately and produce your final answer. ` +
-      `Summarize what you have accomplished so far.${summaryText}`
+      `If you need to modify files, use Write or Bash with a script instead of reading them again. ` +
+      `Summarize what you have accomplished so far.${summaryText}${filesReadText}`
     );
   }
 
-  // Warning level
+  // Warning level — exact duplicate
   if (exactDupTriggered) {
     return (
-      `[LOOP DETECTED] You are repeating the same tool calls (${maxKeyCount}x identical: ${maxKey}). ` +
-      `You have already performed these actions — do NOT call them again. ` +
-      `Proceed to your next step or produce your final answer.${summaryText}`
+      `[LOOP WARNING] You are repeating the same tool call (${maxKeyCount}x: ${maxKey}). ` +
+      `You have ALREADY done this — do NOT call it again. ` +
+      `Use a DIFFERENT approach: if you need file content, use what you already read. ` +
+      `If you need to modify files, use Write/Edit/Bash instead of reading them again. ` +
+      `Proceed to your next step or produce your final answer.${summaryText}${filesReadText}`
     );
   }
   // Frequency warning
   return (
-    `[LOOP DETECTED] You have called ${maxName} ${maxNameCount} times in the last ${LOOP_WINDOW_SIZE} calls. ` +
-    `This is excessive — wrap up and produce your final answer. ` +
-    `If you still need to call tools, use a DIFFERENT tool.${summaryText}`
+    `[LOOP WARNING] You have called ${maxName} ${maxNameCount} times in the last ${LOOP_WINDOW_SIZE} calls. ` +
+    `This is excessive. Switch to a different tool or produce your final answer. ` +
+    `If you need to batch-modify files, use a single Bash script instead of multiple tool calls.${summaryText}${filesReadText}`
   );
 }
 
