@@ -696,7 +696,7 @@ function stableToolCallKey(name: string, argsJson: string): string {
     name === "Bash"
   ) {
     const cmd = String(args.command || args.cmd || "");
-    return `${name}:exec:${cmd.substring(0, 100)}`;
+    return `${name}:exec:${cmd.substring(0, 200)}`;
   }
 
   // For task/todo tools, bucket by name + primary field
@@ -750,20 +750,21 @@ function stableToolCallKey(name: string, argsJson: string): string {
 }
 
 function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
-  // Collect all tool_calls from assistant messages in order.
-  // Track both stable keys (for exact-duplicate detection) and tool names
-  // (for per-tool frequency detection).
-  const toolCallKeys: string[] = [];
-  const toolNames: string[] = [];
+  // Collect tool_calls grouped by assistant message (turn-level tracking).
+  // Parallel tool calls in the SAME message are intentional concurrency,
+  // not a loop — only count duplicates ACROSS different assistant messages.
+  const turns: { keys: string[]; names: string[] }[] = [];
   const readFiles = new Set<string>(); // track files already read
   for (const m of messages) {
     if (m.role !== "assistant") continue;
     if (!Array.isArray(m.tool_calls) || m.tool_calls.length === 0) continue;
+    const turnKeys: string[] = [];
+    const turnNames: string[] = [];
     for (const tc of m.tool_calls) {
       const name = tc.function?.name || "";
       const args = tc.function?.arguments || "{}";
-      toolCallKeys.push(stableToolCallKey(name, args));
-      toolNames.push(name);
+      turnKeys.push(stableToolCallKey(name, args));
+      turnNames.push(name);
       // Track read files for state summary
       if (name === "read" || name === "read_file" || name === "Read") {
         try {
@@ -773,36 +774,74 @@ function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
         } catch {}
       }
     }
+    turns.push({ keys: turnKeys, names: turnNames });
   }
 
-  if (toolCallKeys.length === 0) return null;
+  if (turns.length === 0) return null;
 
-  // Sliding window: count duplicates in last LOOP_WINDOW_SIZE calls.
-  const windowKeys = toolCallKeys.slice(-LOOP_WINDOW_SIZE);
-  const windowNames = toolNames.slice(-LOOP_WINDOW_SIZE);
+  // Fix 3: If the last assistant message in the conversation had NO tool calls
+  // (model already complied with a previous warning and produced text-only
+  // response), don't re-fire loop detection — the model already stopped.
+  // We check the raw messages, not the turns array (which only has tool-call
+  // turns), because text-only assistant messages are skipped above.
+  let lastAssistantHasTools = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") {
+      lastAssistantHasTools =
+        Array.isArray(messages[i].tool_calls) && messages[i].tool_calls.length > 0;
+      break;
+    }
+  }
+  if (!lastAssistantHasTools) return null;
 
-  // 1. Exact-duplicate detection: same tool + same args
-  const keyCounts = new Map<string, number>();
-  for (const key of windowKeys) {
-    keyCounts.set(key, (keyCounts.get(key) || 0) + 1);
+  // Build sliding window from last N turns (up to LOOP_WINDOW_SIZE calls total).
+  // But count duplicates only ACROSS turns, not within the same turn.
+  // This means parallel calls in the same message are NOT counted as duplicates.
+  const windowTurns: { keys: string[]; names: string[] }[] = [];
+  let callCount = 0;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i];
+    if (callCount + t.keys.length > LOOP_WINDOW_SIZE && callCount > 0) break;
+    windowTurns.unshift(t);
+    callCount += t.keys.length;
+  }
+
+  // 1. Exact-duplicate detection: same key across DIFFERENT turns
+  // (not within the same turn — parallel calls are intentional)
+  const keyTurnCounts = new Map<string, number>();
+  for (const turn of windowTurns) {
+    const seenInThisTurn = new Set<string>();
+    for (const key of turn.keys) {
+      // Only count once per turn (parallel calls in same turn = 1 occurrence)
+      if (!seenInThisTurn.has(key)) {
+        seenInThisTurn.add(key);
+        keyTurnCounts.set(key, (keyTurnCounts.get(key) || 0) + 1);
+      }
+    }
   }
   let maxKeyCount = 0;
   let maxKey = "";
-  for (const [key, count] of keyCounts) {
+  for (const [key, count] of keyTurnCounts) {
     if (count > maxKeyCount) {
       maxKeyCount = count;
       maxKey = key;
     }
   }
 
-  // 2. Per-tool frequency detection: same tool TYPE called many times
-  const nameCounts = new Map<string, number>();
-  for (const name of windowNames) {
-    nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+  // 2. Per-tool frequency detection: same tool TYPE across DIFFERENT turns
+  const nameTurnCounts = new Map<string, number>();
+  for (const turn of windowTurns) {
+    const seenInThisTurn = new Set<string>();
+    for (const name of turn.names) {
+      if (!seenInThisTurn.has(name)) {
+        seenInThisTurn.add(name);
+        nameTurnCounts.set(name, (nameTurnCounts.get(name) || 0) + 1);
+      }
+    }
   }
   let maxNameCount = 0;
   let maxName = "";
-  for (const [name, count] of nameCounts) {
+  for (const [name, count] of nameTurnCounts) {
     if (count > maxNameCount) {
       maxNameCount = count;
       maxName = name;
@@ -810,20 +849,51 @@ function detectToolCallLoops(messages: OpenAIMessage[]): string | null {
   }
 
   // Determine which detection triggered
-  const exactDupTriggered = maxKeyCount >= LOOP_WARN_THRESHOLD;
-  const freqTriggered = maxNameCount >= LOOP_TOOL_FREQ_WARN;
+  // Fix 3c: Only trigger if the LAST turn actually contains a duplicate key
+  // or contributes to frequency. If the model changed behavior (new keys in
+  // last turn), don't re-fire for old duplicates that were already warned.
+  const lastTurnKeys = new Set(windowTurns[windowTurns.length - 1].keys);
+  const lastTurnNames = new Set(windowTurns[windowTurns.length - 1].names);
+
+  // Check if any key in the last turn is a duplicate with previous turns
+  let lastTurnHasDupKey = false;
+  for (const key of lastTurnKeys) {
+    if (keyTurnCounts.get(key) >= 2) {
+      lastTurnHasDupKey = true;
+      break;
+    }
+  }
+  // Check if last turn contributes to frequency (tool name appears >= WARN in window)
+  let lastTurnContributesFreq = false;
+  for (const name of lastTurnNames) {
+    if (nameTurnCounts.get(name) >= LOOP_TOOL_FREQ_WARN) {
+      lastTurnContributesFreq = true;
+      break;
+    }
+  }
+
+  const exactDupTriggered = lastTurnHasDupKey && maxKeyCount >= LOOP_WARN_THRESHOLD;
+  const freqTriggered = lastTurnContributesFreq && maxNameCount >= LOOP_TOOL_FREQ_WARN;
   if (!exactDupTriggered && !freqTriggered) return null;
 
-  // Build state summary of repeated calls
+  // Build state summary of repeated calls (across all turns)
   const toolSummary = new Map<string, number>();
-  for (const key of toolCallKeys) {
-    toolSummary.set(key, (toolSummary.get(key) || 0) + 1);
+  for (const turn of turns) {
+    const seen = new Set<string>();
+    for (const key of turn.keys) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        toolSummary.set(key, (toolSummary.get(key) || 0) + 1);
+      }
+    }
   }
   const repeatedCalls = [...toolSummary.entries()]
     .filter(([, count]) => count >= 2)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
-  const summaryLines = repeatedCalls.map(([key, count]) => `  - ${key} (called ${count}x)`);
+  const summaryLines = repeatedCalls.map(
+    ([key, count]) => `  - ${key} (called ${count}x across turns)`
+  );
   const summaryText =
     summaryLines.length > 0 ? `\n\nRepeated tool calls detected:\n${summaryLines.join("\n")}` : "";
 
