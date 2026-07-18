@@ -20,6 +20,8 @@ export const windsurfProvider: RegistryEntry = {
     { id: "swe-1.8-fast", name: "SWE-1.8 Fast" },
     { id: "swe-1.8", name: "SWE-1.8" },
     { id: "swe-1.7-fast", name: "SWE-1.7 Fast" },
+    { id: "swe-1.7-max", name: "SWE-1.7 Max" },
+    { id: "swe-1.7-medium", name: "SWE-1.7 Medium" },
     { id: "swe-1.7", name: "SWE-1.7" },
     { id: "swe-1.6-fast", name: "SWE-1.6 Fast" },
     { id: "swe-1.6", name: "SWE-1.6" },

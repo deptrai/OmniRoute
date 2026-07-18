@@ -55,6 +55,8 @@ const MODEL_ALIAS_MAP: Record<string, string> = {
   "swe-1.8-fast": "swe-1-8-fast",
   "swe-1.8": "swe-1-8",
   "swe-1.7-fast": "swe-1-7-fast",
+  "swe-1.7-max": "swe-1-7-max",
+  "swe-1.7-medium": "swe-1-7-medium",
   "swe-1.7": "swe-1-7",
   "swe-1.6-fast": "swe-1-6-fast",
   "swe-1.6": "swe-1-6",

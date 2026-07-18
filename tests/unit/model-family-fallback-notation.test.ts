@@ -49,3 +49,16 @@ test("SWE dot-notation model still works (no regression)", () => {
   const next = getNextFamilyFallback("windsurf/swe-1.7", new Set(["windsurf/swe-1.7"]));
   assert.equal(next, "windsurf/swe-1.6");
 });
+
+test("SWE-1.7 Max falls back to Medium then base", () => {
+  const next = getNextFamilyFallback("windsurf/swe-1.7-max", new Set(["windsurf/swe-1.7-max"]));
+  assert.equal(next, "windsurf/swe-1.7-medium");
+});
+
+test("SWE-1.7 Medium falls back to base", () => {
+  const next = getNextFamilyFallback(
+    "windsurf/swe-1.7-medium",
+    new Set(["windsurf/swe-1.7-medium"])
+  );
+  assert.equal(next, "windsurf/swe-1.7");
+});
