@@ -56,6 +56,34 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     supportsVision: true,
     toolCalling: true,
   },
+  // Gemini 3.6 Flash tiers (added in v3.8.49+).
+  {
+    id: "gemini-3.6-flash-low",
+    name: "Gemini 3.6 Flash (Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.6-flash-medium",
+    name: "Gemini 3.6 Flash (Medium)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.6-flash-high",
+    name: "Gemini 3.6 Flash (High)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
   {
     id: "gemini-3-pro-preview",
     name: "Gemini 3.1 Pro",
@@ -164,6 +192,8 @@ export const ANTIGRAVITY_MODEL_ALIASES = Object.freeze({
   // (The earlier #3229 assumption — "upstream rejects -high/-low for gemini-3.x" —
   // was refuted by the agy --log-file 200 OK evidence.)
   "gemini-3-pro-image-preview": "gemini-3-pro-image",
+  // User-facing alias used by some clients (reversed word order) → canonical public id.
+  "gemini-flash-3.6-high": "gemini-3.6-flash-high",
   "gemini-2.5-computer-use-preview-10-2025": "rev19-uic3-1p",
   // Legacy Claude display ids → current upstream ids. NOTE: an earlier comment here
   // assumed Claude was removed from Antigravity 2.0 and would 404; discussion #3184

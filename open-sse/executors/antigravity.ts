@@ -35,6 +35,7 @@ import { getMitmAlias } from "@/lib/db/models";
 import { obfuscateSensitiveWords } from "../services/antigravityObfuscation.ts";
 import { resolveAntigravityVersion } from "../services/antigravityVersion.ts";
 import { ensureAntigravityProjectAssigned } from "../services/antigravityProjectBootstrap.ts";
+import { persistDiscoveredAntigravityProjectId } from "../services/antigravityProjectPersist.ts";
 import {
   resolveAntigravityModelId,
   getAntigravityModelFallbacks,
@@ -50,6 +51,7 @@ import { normalizeOpenAICompatibleFinishReasonString } from "../utils/finishReas
 import {
   applyAntigravityClientProfileHeaders,
   removeHeaderCaseInsensitive,
+  getAntigravityClientProfile,
 } from "../services/antigravityClientProfile.ts";
 import {
   generateAntigravityRequestId,
@@ -682,15 +684,28 @@ export class AntigravityExecutor extends BaseExecutor {
     // returned empty/transiently failed). Mirror the Cloud Code bootstrap to recover it
     // here — the helper memoizes per access-token, so this is a one-time round-trip.
     if (!projectId && credentials?.accessToken) {
-      const discovered = await ensureAntigravityProjectAssigned(credentials.accessToken);
-      if (discovered) projectId = discovered;
+      const discovered = await ensureAntigravityProjectAssigned(
+        credentials.accessToken,
+        fetch,
+        getAntigravityClientProfile(credentials)
+      );
+      if (discovered) {
+        projectId = discovered;
+        // #8491: persist the recovered id so it survives the next token refresh
+        // or process restart instead of being silently rediscovered every time.
+        await persistDiscoveredAntigravityProjectId(
+          credentials.connectionId,
+          discovered,
+          credentials.providerSpecificData
+        );
+      }
     }
 
     if (!projectId) {
       // (#489) Return a structured error instead of throwing — gives the client a clear signal
       // to show a "Reconnect OAuth" prompt rather than an opaque "Internal Server Error".
       const errorMsg =
-        "Missing Google projectId for Antigravity account. Auto-discovery via loadCodeAssist " +
+        "Missing Google projectId for Antigravity account. Auto-discovery via loadCodeAssist/onboardUser " +
         "found no Cloud Code project. Please reconnect OAuth in Providers → Antigravity (and " +
         "ensure the Google account has completed Gemini Code Assist onboarding).";
       const errorBody = {
