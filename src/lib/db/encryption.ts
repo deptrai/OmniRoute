@@ -263,7 +263,10 @@ export function decrypt(ciphertext: string | null | undefined): string | null | 
   const [ivHex, a, b] = parts;
 
   const decrypted =
-    tryBothFormats(staticKey, ivHex, a, b) ?? tryBothFormats(getRawKey(), ivHex, a, b) ?? null;
+    tryBothFormats(staticKey, ivHex, a, b) ??
+    tryBothFormats(getLegacyDynamicKey(), ivHex, a, b) ??
+    tryBothFormats(getRawKey(), ivHex, a, b) ??
+    null;
 
   if (decrypted !== null) {
     return decrypted;

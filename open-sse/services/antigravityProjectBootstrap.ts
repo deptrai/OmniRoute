@@ -186,6 +186,11 @@ async function tryOnboardUser(
   clientProfile: AntigravityClientProfile,
   tier: AntigravityAllowedTier
 ): Promise<boolean> {
+  if (!tier?.id) {
+    console.warn("[models] antigravity onboardUser skipped: tier has no id");
+    return false;
+  }
+
   const urls = getAntigravityOnboardUrls();
   const headers = getAntigravityBootstrapHeadersForProfile(clientProfile, accessToken);
 

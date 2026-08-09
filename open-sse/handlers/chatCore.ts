@@ -2507,8 +2507,11 @@ export async function handleChatCore({
                           errorCode: 429,
                         });
                       }
-                    } catch {
-                      // best-effort state update
+                    } catch (err) {
+                      log?.warn?.(
+                        "WINDSURF_FAILOVER",
+                        `Failed to update provider connection state for ${String(failedConnectionId).slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`
+                      );
                     }
                   }
 

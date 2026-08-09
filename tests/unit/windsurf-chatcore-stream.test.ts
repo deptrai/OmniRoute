@@ -19,59 +19,64 @@ function concatBytes(arrays: Uint8Array[]): Uint8Array {
 
 test("handleChatCore windsurf streaming returns content", async () => {
   const token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.test";
+  const originalFetch = globalThis.fetch;
 
-  globalThis.fetch = async (url: string, init: any) => {
-    const body = init.body as Uint8Array;
-    // Build a mock Connect response with one content frame and a trailer.
-    const mockResp = concatBytes([
-      grpcWebFrame(buildMockResponse("Hello there!", "", 1, 2001, 159)),
-      buildMockTrailer(),
-    ]);
-    return new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(mockResp);
-          controller.close();
-        },
-      }),
-      {
-        status: 200,
-        headers: { "content-type": "application/connect+proto" },
-      }
-    );
-  };
+  try {
+    globalThis.fetch = async (url: string, init: any) => {
+      const body = init.body as Uint8Array;
+      // Build a mock Connect response with one content frame and a trailer.
+      const mockResp = concatBytes([
+        grpcWebFrame(buildMockResponse("Hello there!", "", 1, 2001, 159)),
+        buildMockTrailer(),
+      ]);
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(mockResp);
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/connect+proto" },
+        }
+      );
+    };
 
-  const result = await handleChatCore({
-    body: {
-      model: "ws/glm-5.2",
-      messages: [
-        { role: "system", content: "You are a helpful assistant." },
-        { role: "user", content: "Hello" },
-      ],
-      max_tokens: 100,
-      stream: true,
-    },
-    modelInfo: { provider: "ws", model: "glm-5.2", extendedContext: false },
-    credentials: { accessToken: token, providerSpecificData: {} },
-    clientRawRequest: { endpoint: "/v1/chat/completions", headers: new Headers() },
-    userAgent: "unit-test",
-    log: console as any,
-  });
+    const result = await handleChatCore({
+      body: {
+        model: "ws/glm-5.2",
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: "Hello" },
+        ],
+        max_tokens: 100,
+        stream: true,
+      },
+      modelInfo: { provider: "ws", model: "glm-5.2", extendedContext: false },
+      credentials: { accessToken: token, providerSpecificData: {} },
+      clientRawRequest: { endpoint: "/v1/chat/completions", headers: new Headers() },
+      userAgent: "unit-test",
+      log: console as any,
+    });
 
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.response.headers.get("content-type"), "text/event-stream");
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.response.headers.get("content-type"), "text/event-stream");
 
-  const reader = result.response.body!.getReader();
-  const decoder = new TextDecoder();
-  let text = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value, { stream: true });
+    const reader = result.response.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    console.log("=== chatCore stream output ===");
+    console.log(text);
+    assert.ok(text.includes('"content":"Hello there!"'), "Expected content in stream");
+  } finally {
+    globalThis.fetch = originalFetch;
   }
-  console.log("=== chatCore stream output ===");
-  console.log(text);
-  assert.ok(text.includes('"content":"Hello there!"'), "Expected content in stream");
 });
 
 function buildMockResponse(

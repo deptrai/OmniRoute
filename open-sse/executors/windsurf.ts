@@ -21,7 +21,12 @@
  * OmniRoute → Windsurf model-ID mapping lives in MODEL_ID_MAP below.
  */
 
-import { BaseExecutor, mergeUpstreamExtraHeaders, type ExecuteInput } from "./base.ts";
+import {
+  BaseExecutor,
+  mergeUpstreamExtraHeaders,
+  type ExecuteInput,
+  type ExecutorLog,
+} from "./base.ts";
 import { PROVIDERS } from "../config/constants.ts";
 import { sanitizeOpenAITools } from "../services/toolSchemaSanitizer.ts";
 import { randomUUID } from "node:crypto";
@@ -1351,7 +1356,7 @@ export class WindsurfExecutor extends BaseExecutor {
     // stream (e.g. permission_denied, rate limit, internal error). Probe the
     // first SSE frame so chatCore can rotate to another account instead of
     // streaming an empty response.
-    const streamError = await this.detectSseError(upstream, model, hasTools);
+    const streamError = await this.detectSseError(upstream, model, hasTools, log);
     if (streamError) {
       await upstream.body?.cancel().catch(() => {});
       log?.warn?.(
@@ -1879,7 +1884,8 @@ export class WindsurfExecutor extends BaseExecutor {
   private async detectSseError(
     upstream: Response,
     model: string,
-    hasTools: boolean
+    hasTools: boolean,
+    log?: ExecutorLog | null
   ): Promise<{ status: number; message: string } | null> {
     if (!upstream.body) return null;
 
@@ -1916,14 +1922,26 @@ export class WindsurfExecutor extends BaseExecutor {
           try {
             const payload = JSON.parse(dataLine) as Record<string, unknown>;
             if (payload.error) {
-              const msg = String((payload.error as Record<string, unknown>).message || "");
+              let msg = "";
+              if (
+                typeof payload.error === "object" &&
+                payload.error !== null &&
+                typeof (payload.error as Record<string, unknown>).message === "string"
+              ) {
+                msg = (payload.error as Record<string, unknown>).message as string;
+              } else {
+                msg = String(payload.error);
+              }
               return classifyWindsurfError(msg);
             }
             if (payload.choices || payload.id) {
               return null;
             }
-          } catch {
-            // not valid JSON — keep reading
+          } catch (err) {
+            log?.warn?.(
+              "WS",
+              `detectSseError: failed to parse SSE data line as JSON: ${err instanceof Error ? err.message : String(err)}`
+            );
           }
         }
       }
