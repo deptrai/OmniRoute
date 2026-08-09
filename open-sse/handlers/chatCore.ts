@@ -2447,31 +2447,71 @@ export async function handleChatCore({
                 continue;
               }
 
-              // Windsurf 5xx account-rotation failover — retry on a different
-              // connection when upstream returns 502/503/504 (intermittent
-              // "third-party model provider is experiencing issues" errors).
-              // Content policy blocks are excluded: they are deterministic, so
-              // rotating accounts only wastes time and burns fallback accounts.
-              if (
+              // Windsurf account-rotation failover — retry on a different
+              // connection when the executor detects an error-only Connect
+              // stream (403 permission denied, 429 rate limit, or 5xx internal
+              // errors). Content policy blocks (400) are excluded: they are
+              // deterministic, so rotating accounts only wastes time.
+              const isWindsurfRetryableError =
                 provider === "windsurf" &&
-                res.response.status >= 500 &&
-                res.response.status < 600 &&
-                attempts < maxAttempts - 1
-              ) {
-                // Peek at the error body to detect content policy blocks.
-                const bodyPeek = await res.response
-                  .clone()
-                  .text()
-                  .catch(() => "");
-                if (CONTENT_POLICY_BLOCK_REGEX.test(bodyPeek)) {
-                  log?.warn?.(
-                    "WINDSURF_FAILOVER",
-                    `${res.response.status} content policy block on connection ${String(execCreds?.connectionId || credentials?.connectionId || connectionId).slice(0, 8)} — NOT rotating (deterministic error)`
-                  );
-                  // Fall through to the normal error path — no account rotation.
-                } else {
-                  const failedConnectionId =
-                    execCreds?.connectionId || credentials?.connectionId || connectionId;
+                (res.response.status === 429 ||
+                  res.response.status === 403 ||
+                  (res.response.status >= 500 && res.response.status < 600));
+              if (isWindsurfRetryableError && attempts < maxAttempts - 1) {
+                const failedConnectionId =
+                  execCreds?.connectionId || credentials?.connectionId || connectionId;
+                let shouldRotate = true;
+
+                // For 5xx, peek at the error body to detect content policy blocks.
+                if (res.response.status >= 500 && res.response.status < 600) {
+                  const bodyPeek = await res.response
+                    .clone()
+                    .text()
+                    .catch(() => "");
+                  if (CONTENT_POLICY_BLOCK_REGEX.test(bodyPeek)) {
+                    log?.warn?.(
+                      "WINDSURF_FAILOVER",
+                      `${res.response.status} content policy block on connection ${String(failedConnectionId).slice(0, 8)} — NOT rotating (deterministic error)`
+                    );
+                    shouldRotate = false;
+                    // Fall through to the normal error path — no account rotation.
+                  }
+                }
+
+                if (shouldRotate) {
+                  // For 403/429, update the connection state before rotating so the
+                  // failing token is not selected again on the next request.
+                  if (
+                    (res.response.status === 403 || res.response.status === 429) &&
+                    failedConnectionId
+                  ) {
+                    const bodyPeek = await res.response
+                      .clone()
+                      .text()
+                      .catch(() => "");
+                    try {
+                      if (res.response.status === 403) {
+                        await updateProviderConnection(String(failedConnectionId), {
+                          isActive: false,
+                          testStatus: "banned",
+                          lastErrorType: "FORBIDDEN",
+                          lastError: bodyPeek.slice(0, 500),
+                          errorCode: 403,
+                        });
+                      } else {
+                        await updateProviderConnection(String(failedConnectionId), {
+                          rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+                          testStatus: "rate_limited",
+                          lastErrorType: "RATE_LIMITED",
+                          lastError: bodyPeek.slice(0, 500),
+                          errorCode: 429,
+                        });
+                      }
+                    } catch {
+                      // best-effort state update
+                    }
+                  }
+
                   log?.warn?.(
                     "WINDSURF_FAILOVER",
                     `${res.response.status} on connection ${String(failedConnectionId).slice(0, 8)} (attempt ${attempts + 1}/${maxAttempts}), rotating account`
@@ -2534,7 +2574,7 @@ export async function handleChatCore({
                   releaseAccountSemaphore();
                   attempts++;
                   continue;
-                } // end else (not content policy block)
+                }
               }
 
               // For streaming: release the semaphore when the client drains or cancels the stream.

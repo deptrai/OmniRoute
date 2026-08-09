@@ -1347,6 +1347,33 @@ export class WindsurfExecutor extends BaseExecutor {
       return { response: upstream, url, headers, transformedBody: protoPayload };
     }
 
+    // Some Windsurf accounts return a 200 status with an error-only Connect
+    // stream (e.g. permission_denied, rate limit, internal error). Probe the
+    // first SSE frame so chatCore can rotate to another account instead of
+    // streaming an empty response.
+    const streamError = await this.detectSseError(upstream, model, hasTools);
+    if (streamError) {
+      await upstream.body?.cancel().catch(() => {});
+      log?.warn?.(
+        "WS",
+        `Windsurf upstream error classified as ${streamError.status}: ${streamError.message.slice(0, 120)}`
+      );
+      return {
+        response: new Response(
+          JSON.stringify({
+            error: { message: streamError.message, type: "windsurf_error", code: "upstream_error" },
+          }),
+          {
+            status: streamError.status,
+            headers: { "Content-Type": "application/json" },
+          }
+        ),
+        url,
+        headers,
+        transformedBody: protoPayload,
+      };
+    }
+
     // Transform Connect binary response → SSE stream.
     // Native tool_calls (delta_tool_calls field 6) are parsed from the
     // protobuf response and emitted as OpenAI tool_calls deltas.
@@ -1840,10 +1867,134 @@ export class WindsurfExecutor extends BaseExecutor {
       },
     });
   }
+
+  /**
+   * Peek at the first SSE frame of a Connect stream and, if it is an error-only
+   * frame, classify the error into an HTTP status code that chatCore can fail
+   * over on. Returns null when the first frame is a normal content/role chunk.
+   *
+   * This uses `upstream.clone()` so the original response body is left untouched
+   * for `transformToSSE()` when the stream is healthy.
+   */
+  private async detectSseError(
+    upstream: Response,
+    model: string,
+    hasTools: boolean
+  ): Promise<{ status: number; message: string } | null> {
+    if (!upstream.body) return null;
+
+    const clone = upstream.clone();
+    const sse = this.transformToSSE(clone, model, true, hasTools);
+    if (!sse.body) return null;
+
+    const reader = sse.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const timeoutMs = 5_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
+    });
+
+    try {
+      while (true) {
+        const { done, value } = await Promise.race([reader.read(), timeout]);
+        if (done) break;
+        if (!value) continue;
+
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() || "";
+
+        for (const block of blocks) {
+          const dataLine = block.match(/^data: (.+)$/m)?.[1]?.trim();
+          if (!dataLine) continue;
+          if (dataLine === "[DONE]") continue;
+          if (!dataLine.startsWith("{")) continue;
+
+          try {
+            const payload = JSON.parse(dataLine) as Record<string, unknown>;
+            if (payload.error) {
+              const msg = String((payload.error as Record<string, unknown>).message || "");
+              return classifyWindsurfError(msg);
+            }
+            if (payload.choices || payload.id) {
+              return null;
+            }
+          } catch {
+            // not valid JSON — keep reading
+          }
+        }
+      }
+    } catch {
+      // timeout or read error — let the normal stream path handle it
+    } finally {
+      if (timer) clearTimeout(timer);
+      reader.cancel().catch(() => {});
+      clone.body?.cancel().catch(() => {});
+    }
+
+    return null;
+  }
+}
+
+/**
+ * Classify a Windsurf error message into an HTTP status code that chatCore's
+ * account-rotation logic can act on.
+ *
+ * Order matters: rate-limit signals override permission-denied wrappers, and
+ * content-policy errors are treated as deterministic (do not rotate accounts).
+ */
+function classifyWindsurfError(message: string): { status: number; message: string } {
+  const lower = message.toLowerCase();
+
+  // Quota / rate-limit. Some Windsurf responses carry gRPC status
+  // permission_denied but a message about rate limits; we classify by message.
+  if (
+    /rate limit|resource_exhausted|limit reached|reached .* limit|too many requests|quota|insufficient_quota|exceeded your current quota/i.test(
+      lower
+    )
+  ) {
+    return { status: 429, message };
+  }
+
+  // Content / safety policy — deterministic per-payload, don't rotate accounts.
+  if (/content policy|safety filter|blocked|harm/i.test(lower)) {
+    return { status: 400, message };
+  }
+
+  // Permission / auth errors. Treat as 403 so the failing token can be
+  // disabled after the request has tried the remaining accounts.
+  // gRPC-wrapped errors are prefixed with the server status code; honour the
+  // code when the message itself is generic (e.g. "[permission_denied] an
+  // internal error occurred" is still an auth failure for this token/model).
+  const permissionCodeMatch = /^\[(permission_denied|unauthenticated)\]/.exec(lower);
+  if (permissionCodeMatch) {
+    return { status: 403, message };
+  }
+  const hasPermissionText =
+    /permission.*denied|unauthorized|forbidden|not allowed|does not have permission|invalid authentication|invalid credentials/i.test(
+      lower
+    );
+  if (hasPermissionText && !/internal error/i.test(lower)) {
+    return { status: 403, message };
+  }
+
+  // Everything else (internal error, unavailable, connect errors, etc.) is a
+  // transient 5xx so chatCore will rotate accounts.
+  return { status: 502, message };
 }
 
 // Exposed for unit tests only.
 export const __test = {
+  classifyWindsurfError,
+  // Access private detectSseError via prototype for testing.
+  detectSseError: WindsurfExecutor.prototype.detectSseError as (
+    upstream: Response,
+    model: string,
+    hasTools: boolean
+  ) => Promise<{ status: number; message: string } | null>,
   readVarint,
   decodeGetChatMessageResponse,
   decodeChatToolCall,
