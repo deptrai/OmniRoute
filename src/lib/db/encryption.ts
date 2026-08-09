@@ -42,6 +42,7 @@ const STATIC_SALT = "omniroute-field-encryption-v1";
 
 let _staticKey: Buffer | null = null;
 let _legacyDynamicKey: Buffer | null = null;
+let _rawKey: Buffer | null = null;
 /** Connection object with potentially encrypted credential fields. */
 export interface ConnectionFields {
   apiKey?: string | null;
@@ -97,6 +98,39 @@ function getLegacyDynamicKey(): Buffer | null {
   return _legacyDynamicKey;
 }
 
+/**
+ * Derive a RAW key by treating STORAGE_ENCRYPTION_KEY as the key material itself.
+ *
+ * Very old tokens (pre v3.7.9, including some Windsurf provider rows) were
+ * encrypted by taking the hex-encoded or base64-encoded 32-byte secret and using
+ * it directly as the AES-256-GCM key, with the auth tag placed BEFORE the
+ * ciphertext (iv:tag:enc). This fallback supports those legacy rows so they can
+ * be migrated to the canonical static-salt format on the next write.
+ */
+function getRawKey(): Buffer | null {
+  if (_rawKey !== null) return _rawKey;
+
+  const secret = process.env.STORAGE_ENCRYPTION_KEY;
+  if (!secret || typeof secret !== "string" || secret.trim().length === 0) return null;
+
+  // Hex-encoded 32-byte key: 64 hex characters.
+  if (/^[0-9a-fA-F]{64}$/.test(secret)) {
+    _rawKey = Buffer.from(secret, "hex");
+  } else if (secret.length === 44) {
+    // Base64-encoded 32-byte key: 44 characters (openssl rand -base64 32).
+    try {
+      const decoded = Buffer.from(secret, "base64");
+      if (decoded.length === KEY_LENGTH) _rawKey = decoded;
+    } catch {
+      _rawKey = null;
+    }
+  } else {
+    _rawKey = null;
+  }
+
+  return _rawKey;
+}
+
 /** Check if encryption is enabled. */
 export function isEncryptionEnabled(): boolean {
   return !!process.env.STORAGE_ENCRYPTION_KEY;
@@ -139,13 +173,71 @@ export function encrypt(plaintext: string | null | undefined): string | null | u
   }
 }
 
+function tryDecipher(key: Buffer, iv: Buffer, encrypted: Buffer, authTag: Buffer): string | null {
+  try {
+    const decipher = createDecipheriv(ALGORITHM, key, iv, {
+      authTagLength: AUTH_TAG_LENGTH,
+    });
+    decipher.setAuthTag(authTag);
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Try a key against both the canonical `iv:enc:tag` format and the legacy
+ * `iv:tag:enc` format. GCM tag validation keeps us from misinterpreting the
+ * ciphertext as the tag, so we can safely attempt both orderings.
+ */
+function tryBothFormats(
+  candidateKey: Buffer | null,
+  ivHex: string,
+  a: string,
+  b: string
+): string | null {
+  if (!candidateKey) return null;
+
+  const iv = Buffer.from(ivHex, "hex");
+  if (iv.length === 0) return null;
+
+  const tagA = a.length === AUTH_TAG_LENGTH * 2 ? Buffer.from(a, "hex") : null;
+  const tagB = b.length === AUTH_TAG_LENGTH * 2 ? Buffer.from(b, "hex") : null;
+  const encA = Buffer.from(a, "hex");
+  const encB = Buffer.from(b, "hex");
+
+  // Canonical format: a = ciphertext, b = auth tag.
+  if (tagB) {
+    const r = tryDecipher(candidateKey, iv, encA, tagB);
+    if (r !== null) return r;
+  }
+
+  // Legacy format: a = auth tag, b = ciphertext.
+  if (tagA) {
+    const r = tryDecipher(candidateKey, iv, encB, tagA);
+    if (r !== null) return r;
+  }
+
+  // No plausible 16-byte tag visible (should not happen for GCM), but try anyway.
+  if (!tagA && !tagB) {
+    const r1 = tryDecipher(candidateKey, iv, encA, encB);
+    if (r1 !== null) return r1;
+    const r2 = tryDecipher(candidateKey, iv, encB, encA);
+    if (r2 !== null) return r2;
+  }
+
+  return null;
+}
+
 /**
  * Decrypt a ciphertext string. Attempts static-salt key first (primary),
- * then falls back to legacy dynamic-salt key for backward compatibility.
+ * then falls back to legacy dynamic-salt key and raw key for backward
+ * compatibility. Also accepts both the canonical `iv:enc:tag` layout and the
+ * legacy `iv:tag:enc` layout.
  *
- * When a token is decrypted using the legacy key, it is flagged for
- * auto-migration: the next encrypt() call will re-encrypt it with the
- * static-salt key, gradually migrating the database.
+ * When a token is decrypted using a non-primary key, the next encrypt() call
+ * (e.g. from token health-check or connection upsert) will re-encrypt it with
+ * the static-salt key, gradually migrating the database.
  */
 export function decrypt(ciphertext: string | null | undefined): string | null | undefined {
   if (!ciphertext || typeof ciphertext !== "string") return ciphertext;
@@ -168,42 +260,20 @@ export function decrypt(ciphertext: string | null | undefined): string | null | 
     return null;
   }
 
-  const [ivHex, encryptedHex, authTagHex] = parts;
+  const [ivHex, a, b] = parts;
 
-  const tryDecryptWithKey = (candidateKey: Buffer): string | null => {
-    try {
-      const iv = Buffer.from(ivHex, "hex");
-      const authTag = Buffer.from(authTagHex, "hex");
-      const decipher = createDecipheriv(ALGORITHM, candidateKey, iv, {
-        authTagLength: AUTH_TAG_LENGTH,
-      });
-      decipher.setAuthTag(authTag);
+  const decrypted =
+    tryBothFormats(staticKey, ivHex, a, b) ?? tryBothFormats(getRawKey(), ivHex, a, b) ?? null;
 
-      let decrypted = decipher.update(encryptedHex, "hex", "utf8");
-      decrypted += decipher.final("utf8");
-      return decrypted;
-    } catch {
-      return null;
-    }
-  };
-
-  try {
-    // PRIMARY: Try static-salt key first (canonical derivation)
-    const decrypted = tryDecryptWithKey(staticKey);
-    if (decrypted !== null) {
-      return decrypted;
-    }
-
-    console.error(
-      `[Encryption] Decryption failed. Ciphertext prefix: ${ciphertext.slice(0, 30)}... ` +
-        `Auth tag validation likely failed.`
-    );
-    return null;
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[Encryption] Decryption failed:", message);
-    return null;
+  if (decrypted !== null) {
+    return decrypted;
   }
+
+  console.error(
+    `[Encryption] Decryption failed. Ciphertext prefix: ${ciphertext.slice(0, 30)}... ` +
+      `Auth tag validation likely failed.`
+  );
+  return null;
 }
 
 /**
@@ -242,8 +312,8 @@ export function decryptConnectionFields<T extends ConnectionFields | null | unde
 }
 
 /**
- * Specifically tests a ciphertext against the legacy key. If it succeeds, it
- * re-encrypts the decrypted value with the canonical static key.
+ * Specifically tests a ciphertext against the legacy / raw keys. If it
+ * succeeds, it re-encrypts the decrypted value with the canonical static key.
  * Used exclusively by the startup migration script.
  */
 export function migrateLegacyEncryptedString(ciphertext: string | null | undefined): {
@@ -255,43 +325,25 @@ export function migrateLegacyEncryptedString(ciphertext: string | null | undefin
   if (!ciphertext.startsWith(PREFIX)) return { updated: false, value: ciphertext };
 
   const staticKey = getStaticKey();
-  const legacyKey = getLegacyDynamicKey();
-
   if (!staticKey) return { updated: false, value: null };
 
   const rawPayload = ciphertext.slice(PREFIX.length);
   const parts = rawPayload.split(":");
   if (parts.length !== 3) return { updated: false, value: ciphertext };
 
-  const [ivHex, encryptedHex, authTagHex] = parts;
-  const iv = Buffer.from(ivHex, "hex");
-  const authTag = Buffer.from(authTagHex, "hex");
-  const encrypted = Buffer.from(encryptedHex, "hex");
-
-  const tryDecryptWithKey = (key: Buffer): string | null => {
-    try {
-      const decipher = createDecipheriv(ALGORITHM, key, iv, {
-        authTagLength: AUTH_TAG_LENGTH,
-      });
-      decipher.setAuthTag(authTag);
-      let decrypted = decipher.update(encrypted, undefined, "utf8");
-      decrypted += decipher.final("utf8");
-      return decrypted;
-    } catch {
-      return null;
-    }
-  };
+  const [ivHex, a, b] = parts;
 
   // 1. If it already decrypts with the static key, no migration needed.
-  if (tryDecryptWithKey(staticKey) !== null) {
+  if (tryBothFormats(staticKey, ivHex, a, b) !== null) {
     return { updated: false, value: ciphertext };
   }
 
-  // 2. If it decrypts with the legacy key, it needs migration!
-  if (legacyKey) {
-    const legacyDecrypted = tryDecryptWithKey(legacyKey);
+  // 2. If it decrypts with a legacy or raw key, re-encrypt with the canonical key.
+  const legacyKey = getLegacyDynamicKey();
+  const rawKey = getRawKey();
+  for (const candidateKey of [legacyKey, rawKey]) {
+    const legacyDecrypted = tryBothFormats(candidateKey, ivHex, a, b);
     if (legacyDecrypted !== null) {
-      // Re-encrypt using the canonical static key and return updated
       return { updated: true, value: encrypt(legacyDecrypted) };
     }
   }
