@@ -56,7 +56,19 @@ function getProjectCacheKey(accessToken: string, clientProfile: AntigravityClien
   return `${clientProfile}:${accessToken}`;
 }
 
-type LoadCodeAssistResult = { projectId: string | null; tierId: string };
+type AntigravityAllowedTier = {
+  id?: string;
+  isDefault?: boolean;
+  userDefinedCloudaicompanionProject?: boolean;
+  name?: string;
+};
+
+type LoadCodeAssistResult = {
+  projectId: string | null;
+  tierId: string;
+  allowedTiers: AntigravityAllowedTier[];
+  raw: Record<string, unknown>;
+};
 
 function getAntigravityBootstrapHeadersForProfile(
   clientProfile: AntigravityClientProfile,
@@ -111,15 +123,18 @@ async function tryLoadCodeAssist(
             : "";
 
       const tierId = extractCodeAssistOnboardTierId(data) || DEFAULT_TIER_ID;
+      const allowedTiers = Array.isArray(data.allowedTiers)
+        ? (data.allowedTiers as AntigravityAllowedTier[])
+        : [];
 
       if (projectId) {
-        return { projectId, tierId };
+        return { projectId, tierId, allowedTiers, raw: data };
       }
 
       // Continue to next URL if available — a different endpoint might
       // have the project. Only return empty when this is the last URL.
       if (i === urls.length - 1) {
-        return { projectId: null, tierId };
+        return { projectId: null, tierId, allowedTiers, raw: data };
       }
       console.warn(
         `[models] antigravity loadCodeAssist at ${url} returned no project id — trying next`
@@ -129,32 +144,62 @@ async function tryLoadCodeAssist(
       console.warn(`[models] antigravity loadCodeAssist threw for ${url}: ${msg} — trying next`);
     }
   }
-  return { projectId: null, tierId: DEFAULT_TIER_ID };
+  return { projectId: null, tierId: DEFAULT_TIER_ID, allowedTiers: [], raw: {} };
+}
+
+/**
+ * Choose an onboardable tier from loadCodeAssist's allowedTiers list.
+ * Prefer the server-marked default that does NOT require the user to supply
+ * their own Google Cloud project (userDefinedCloudaicompanionProject = false).
+ * Server-managed tiers like "free-tier" can be onboarded without a project;
+ * "standard-tier" and other user-defined tiers need an existing project and
+ * must be skipped here.
+ */
+function pickOnboardTier(allowedTiers: AntigravityAllowedTier[]): AntigravityAllowedTier | null {
+  if (!allowedTiers.length) return null;
+
+  const isManaged = (t?: AntigravityAllowedTier) =>
+    t?.id && t.userDefinedCloudaicompanionProject !== true;
+
+  const defaultManaged = allowedTiers.find((t) => t.isDefault && isManaged(t));
+  if (defaultManaged) return defaultManaged;
+
+  const anyManaged = allowedTiers.find(isManaged);
+  if (anyManaged) return anyManaged;
+
+  return null;
 }
 
 /**
  * Attempt onboardUser to create a Cloud Code project for the account.
  * Called when loadCodeAssist returns no project — the account has never
  * been onboarded. Returns true if any endpoint reports success.
+ *
+ * The request body follows the Code Assist wire format:
+ *   { tierId, metadata, cloudaicompanionProject? }
+ * `tierId` is camelCase (not tier_id). For user-defined tiers a project id
+ * must also be supplied; this function only onboards managed tiers.
  */
 async function tryOnboardUser(
   accessToken: string,
   fetchImpl: FetchLike,
   clientProfile: AntigravityClientProfile,
-  tierId: string
+  tier: AntigravityAllowedTier
 ): Promise<boolean> {
   const urls = getAntigravityOnboardUrls();
   const headers = getAntigravityBootstrapHeadersForProfile(clientProfile, accessToken);
 
   for (const url of urls) {
     try {
+      const onboardBody: Record<string, unknown> = {
+        tierId: tier.id,
+        metadata: getAntigravityLoadCodeAssistMetadata(),
+      };
+
       const response = await fetchImpl(url, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          tier_id: tierId,
-          metadata: getAntigravityLoadCodeAssistMetadata(),
-        }),
+        body: JSON.stringify(onboardBody),
         signal: AbortSignal.timeout(ONBOARD_TIMEOUT_MS),
       });
 
@@ -162,8 +207,9 @@ async function tryOnboardUser(
         return true;
       }
 
+      const body = await response.text().catch(() => "");
       console.warn(
-        `[models] antigravity onboardUser failed at ${url} (${response.status}) — trying next`
+        `[models] antigravity onboardUser failed at ${url} (${response.status}) — trying next (tier=${tier.id}): ${body.slice(0, 200)}`
       );
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -207,7 +253,7 @@ export async function ensureAntigravityProjectAssigned(
     return cached;
   }
 
-  const { projectId: initialProjectId, tierId } = await tryLoadCodeAssist(
+  const { projectId: initialProjectId, allowedTiers } = await tryLoadCodeAssist(
     accessToken,
     fetchImpl,
     clientProfile
@@ -216,14 +262,22 @@ export async function ensureAntigravityProjectAssigned(
   let projectId = initialProjectId;
 
   // loadCodeAssist is read-only — if the account was never onboarded, it returns
-  // empty. Call onboardUser to create the project, then retry discovery.
+  // empty. Pick a server-managed tier from allowedTiers and call onboardUser to
+  // provision a project, then retry discovery.
   if (!projectId && !onboardAttemptedCache.has(cacheKey)) {
+    const onboardTier = pickOnboardTier(allowedTiers);
+
     // Per-key lock: concurrent calls for the same token share one onboard attempt.
     let lock = onboardLocks.get(cacheKey);
-    if (!lock) {
+    if (!lock && onboardTier) {
       lock = (async () => {
         try {
-          const onboarded = await tryOnboardUser(accessToken, fetchImpl, clientProfile, tierId);
+          const onboarded = await tryOnboardUser(
+            accessToken,
+            fetchImpl,
+            clientProfile,
+            onboardTier
+          );
           if (onboarded) {
             const retry = await tryLoadCodeAssist(accessToken, fetchImpl, clientProfile);
             if (retry.projectId) {
@@ -242,7 +296,7 @@ export async function ensureAntigravityProjectAssigned(
       })();
       onboardLocks.set(cacheKey, lock);
     }
-    const success = await lock;
+    const success = lock ? await lock : false;
     if (success) {
       const cached = projectCache.get(cacheKey);
       if (cached) return cached;
