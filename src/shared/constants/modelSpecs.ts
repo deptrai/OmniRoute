@@ -156,6 +156,30 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     aliases: ["gemini-3.5-flash-high"],
   },
 
+  // ── Gemini 3.6 Flash ─────────────────────────────────────────────
+  "gemini-3.6-flash-high": {
+    maxOutputTokens: 65536,
+    contextWindow: 1048576,
+    supportsThinking: false,
+    supportsTools: true,
+    supportsVision: true,
+    aliases: ["gemini-flash-3.6-high"],
+  },
+  "gemini-3.6-flash-medium": {
+    maxOutputTokens: 65536,
+    contextWindow: 1048576,
+    supportsThinking: false,
+    supportsTools: true,
+    supportsVision: true,
+  },
+  "gemini-3.6-flash-low": {
+    maxOutputTokens: 65536,
+    contextWindow: 1048576,
+    supportsThinking: false,
+    supportsTools: true,
+    supportsVision: true,
+  },
+
   // ── Claude Opus 4.5 ─────────────────────────────────────────────
   "claude-opus-4-5": {
     maxOutputTokens: 32768,

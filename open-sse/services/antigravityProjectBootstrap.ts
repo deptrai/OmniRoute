@@ -1,5 +1,5 @@
 /**
- * Antigravity project bootstrap — loadCodeAssist.
+ * Antigravity project bootstrap — loadCodeAssist + onboardUser.
  *
  * The Google Cloud Code Assist API (/v1internal:models) requires a prior
  * /v1internal:loadCodeAssist call to assign a project context to the
@@ -10,30 +10,45 @@
  * attempt. Results are memoized per-token for the process lifetime to
  * avoid redundant round-trips.
  *
- * Based on the Antigravity loadCodeAssist flow and the CLIProxyAPI reference
- * implementation in internal/runtime/executor/antigravity_executor.go.
+ * When loadCodeAssist returns no project (account never onboarded),
+ * the fallback calls onboardUser to create the project, then retries.
  */
 
 import {
   getAntigravityHeaders,
   getAntigravityLoadCodeAssistMetadata,
 } from "./antigravityHeaders.ts";
+import { getAntigravityBootstrapHeaders } from "./antigravityClientProfile.ts";
+import { extractCodeAssistOnboardTierId } from "./codeAssistSubscription.ts";
 import {
-  getAntigravityBootstrapHeaders,
-  type AntigravityClientProfile,
-} from "./antigravityClientProfile.ts";
-import { ANTIGRAVITY_BASE_URLS } from "../config/antigravityUpstream.ts";
+  getAntigravityOnboardUrls,
+  getAntigravityLoadCodeAssistUrls,
+} from "../config/antigravityUpstream.ts";
+import type { AntigravityClientProfile } from "./antigravityClientProfile.ts";
 
-const LOAD_CODE_ASSIST_PATH = "/v1internal:loadCodeAssist";
 const BOOTSTRAP_TIMEOUT_MS = 8_000;
+const ONBOARD_TIMEOUT_MS = 15_000;
+const DEFAULT_TIER_ID = "legacy-tier";
 
-/** Ordered list of loadCodeAssist endpoint URLs (mirrors the models discovery order). */
-export function getAntigravityLoadCodeAssistUrls(): string[] {
-  return ANTIGRAVITY_BASE_URLS.map((base) => `${base}${LOAD_CODE_ASSIST_PATH}`);
+/** Max entries in the per-token caches (prevents unbounded growth). */
+const MAX_CACHE_SIZE = 256;
+
+/** LRU-style Map: deleting and re-inserting moves the key to the end. */
+function evictOldest(cache: Map<string, unknown>): void {
+  if (cache.size >= MAX_CACHE_SIZE) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
 }
 
 /** Per-token memoization cache (lives for the process lifetime). */
 const projectCache = new Map<string, string>();
+
+/** Per-key lock to prevent concurrent onboard attempts for the same token. */
+const onboardLocks = new Map<string, Promise<boolean>>();
+
+/** Per-token memoization for accounts we already tried onboarding. */
+const onboardAttemptedCache = new Set<string>();
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -41,22 +56,32 @@ function getProjectCacheKey(accessToken: string, clientProfile: AntigravityClien
   return `${clientProfile}:${accessToken}`;
 }
 
+type LoadCodeAssistResult = { projectId: string | null; tierId: string };
+
+function getAntigravityBootstrapHeadersForProfile(
+  clientProfile: AntigravityClientProfile,
+  accessToken?: string | null
+): Record<string, string> {
+  if (clientProfile === "harness") {
+    return getAntigravityBootstrapHeaders(clientProfile, accessToken);
+  }
+  return getAntigravityHeaders("loadCodeAssist", accessToken);
+}
+
 /**
  * Attempt loadCodeAssist against each known base URL in order.
- * Returns the discovered project id, or null if all endpoints fail.
+ * Returns the discovered project id and tier id, or null projectId if all endpoints fail.
  */
 async function tryLoadCodeAssist(
   accessToken: string,
   fetchImpl: FetchLike,
   clientProfile: AntigravityClientProfile
-): Promise<string | null> {
+): Promise<LoadCodeAssistResult> {
   const urls = getAntigravityLoadCodeAssistUrls();
-  const headers =
-    clientProfile === "harness"
-      ? getAntigravityBootstrapHeaders(clientProfile, accessToken)
-      : getAntigravityHeaders("loadCodeAssist", accessToken);
+  const headers = getAntigravityBootstrapHeadersForProfile(clientProfile, accessToken);
 
-  for (const url of urls) {
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i];
     try {
       const response = await fetchImpl(url, {
         method: "POST",
@@ -76,7 +101,7 @@ async function tryLoadCodeAssist(
 
       // cloudaicompanionProject may be a plain string or an object with an id field.
       const raw = data.cloudaicompanionProject;
-      let projectId =
+      const projectId =
         typeof raw === "string"
           ? raw.trim()
           : raw &&
@@ -85,10 +110,17 @@ async function tryLoadCodeAssist(
             ? ((raw as Record<string, unknown>).id as string).trim()
             : "";
 
+      const tierId = extractCodeAssistOnboardTierId(data) || DEFAULT_TIER_ID;
+
       if (projectId) {
-        return projectId;
+        return { projectId, tierId };
       }
 
+      // Continue to next URL if available — a different endpoint might
+      // have the project. Only return empty when this is the last URL.
+      if (i === urls.length - 1) {
+        return { projectId: null, tierId };
+      }
       console.warn(
         `[models] antigravity loadCodeAssist at ${url} returned no project id — trying next`
       );
@@ -97,7 +129,56 @@ async function tryLoadCodeAssist(
       console.warn(`[models] antigravity loadCodeAssist threw for ${url}: ${msg} — trying next`);
     }
   }
-  return null;
+  return { projectId: null, tierId: DEFAULT_TIER_ID };
+}
+
+/**
+ * Attempt onboardUser to create a Cloud Code project for the account.
+ * Called when loadCodeAssist returns no project — the account has never
+ * been onboarded. Returns true if any endpoint reports success.
+ */
+async function tryOnboardUser(
+  accessToken: string,
+  fetchImpl: FetchLike,
+  clientProfile: AntigravityClientProfile,
+  tierId: string
+): Promise<boolean> {
+  const urls = getAntigravityOnboardUrls();
+  const headers = getAntigravityBootstrapHeadersForProfile(clientProfile, accessToken);
+
+  for (const url of urls) {
+    try {
+      const response = await fetchImpl(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          tier_id: tierId,
+          metadata: getAntigravityLoadCodeAssistMetadata(),
+        }),
+        signal: AbortSignal.timeout(ONBOARD_TIMEOUT_MS),
+      });
+
+      if (response.ok) {
+        return true;
+      }
+
+      console.warn(
+        `[models] antigravity onboardUser failed at ${url} (${response.status}) — trying next`
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.warn(`[models] antigravity onboardUser threw for ${url}: ${msg} — trying next`);
+    }
+  }
+  return false;
+}
+
+function addToOnboardAttemptedCache(key: string): void {
+  if (onboardAttemptedCache.size >= MAX_CACHE_SIZE) {
+    const oldest = onboardAttemptedCache.values().next().value;
+    if (oldest !== undefined) onboardAttemptedCache.delete(oldest);
+  }
+  onboardAttemptedCache.add(key);
 }
 
 /**
@@ -110,6 +191,7 @@ async function tryLoadCodeAssist(
  *
  * @param accessToken  The OAuth bearer token for the current connection.
  * @param fetchImpl    Injected fetch implementation (defaults to globalThis.fetch).
+ * @param clientProfile Client identity to present to the bootstrap endpoints.
  */
 export async function ensureAntigravityProjectAssigned(
   accessToken: string,
@@ -118,22 +200,68 @@ export async function ensureAntigravityProjectAssigned(
 ): Promise<string | undefined> {
   const cacheKey = getProjectCacheKey(accessToken, clientProfile);
   if (projectCache.has(cacheKey)) {
-    return projectCache.get(cacheKey); // already bootstrapped for this token
+    const cached = projectCache.get(cacheKey)!;
+    // Touch on read: delete+reinsert moves this entry to the end (LRU).
+    projectCache.delete(cacheKey);
+    projectCache.set(cacheKey, cached);
+    return cached;
   }
 
-  const projectId = await tryLoadCodeAssist(accessToken, fetchImpl, clientProfile);
+  const { projectId: initialProjectId, tierId } = await tryLoadCodeAssist(
+    accessToken,
+    fetchImpl,
+    clientProfile
+  );
+
+  let projectId = initialProjectId;
+
+  // loadCodeAssist is read-only — if the account was never onboarded, it returns
+  // empty. Call onboardUser to create the project, then retry discovery.
+  if (!projectId && !onboardAttemptedCache.has(cacheKey)) {
+    // Per-key lock: concurrent calls for the same token share one onboard attempt.
+    let lock = onboardLocks.get(cacheKey);
+    if (!lock) {
+      lock = (async () => {
+        try {
+          const onboarded = await tryOnboardUser(accessToken, fetchImpl, clientProfile, tierId);
+          if (onboarded) {
+            const retry = await tryLoadCodeAssist(accessToken, fetchImpl, clientProfile);
+            if (retry.projectId) {
+              evictOldest(projectCache);
+              projectCache.set(cacheKey, retry.projectId);
+              return true;
+            }
+          }
+          return false;
+        } catch {
+          return false;
+        } finally {
+          onboardLocks.delete(cacheKey);
+          addToOnboardAttemptedCache(cacheKey);
+        }
+      })();
+      onboardLocks.set(cacheKey, lock);
+    }
+    const success = await lock;
+    if (success) {
+      const cached = projectCache.get(cacheKey);
+      if (cached) return cached;
+    }
+  }
 
   if (projectId) {
+    evictOldest(projectCache);
     projectCache.set(cacheKey, projectId);
     return projectId;
   }
-  // Non-fatal: if all endpoints failed, we proceed without caching.
   return undefined;
 }
 
 /** Exported for tests. */
 export function clearAntigravityProjectCache(): void {
   projectCache.clear();
+  onboardAttemptedCache.clear();
+  onboardLocks.clear();
 }
 
 /** Exported for tests — inspect cache state. */
@@ -143,3 +271,6 @@ export function getAntigravityProjectFromCache(
 ): string | undefined {
   return projectCache.get(getProjectCacheKey(accessToken, clientProfile));
 }
+
+/** Exported for tests — re-export from upstream config. */
+export { getAntigravityLoadCodeAssistUrls } from "../config/antigravityUpstream.ts";
