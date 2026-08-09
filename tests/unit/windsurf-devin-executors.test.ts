@@ -8,14 +8,14 @@ import assert from "node:assert/strict";
 describe("Windsurf MODEL_ALIAS_MAP", () => {
   const ALIAS_CASES: [string, string][] = [
     // SWE dot→dash conversions
-    ["swe-1.7-fast", "swe-1-7-fast"],
-    ["swe-1.7-max", "swe-1-7-max"],
-    ["swe-1.7-medium", "swe-1-7-medium"],
     ["swe-1.7", "swe-1-7"],
+    ["swe-1.7-medium", "swe-1-7-medium"],
+    ["swe-1.7-lightning", "swe-1-7-lightning"],
+    ["swe-1.7-lightning-medium", "swe-1-7-lightning-medium"],
+    ["swe-1.7-max", "swe-1-7"], // alias: Max is the base model
+    ["swe-1.7-fast", "swe-1-7-lightning"], // legacy alias for lightning
     ["swe-1.6-fast", "swe-1-6-fast"],
     ["swe-1.6", "swe-1-6"],
-    ["swe-1.5", "swe-1p5"],
-    ["swe-1.5-fast", "swe-1p5"],
     // GPT-5.5 default effort
     ["gpt-5.5", "gpt-5-5-medium"],
     // GPT-5.4 default effort
@@ -321,22 +321,28 @@ test("OAuth route: GET codex/authorize is NOT retired (regression check)", async
   assert.notEqual(response.status, 410);
 });
 
-// ─── Regression: mapTokens accepts {accessToken} object, returns string accessToken ─
+// ─── Regression: mapTokens accepts {accessToken} object, stores token as apiKey ─
 // Earlier signature was `mapTokens(token: string)` which crashed the SQLite
 // bind layer when the route called `mapTokens({ accessToken })`: the object
 // got stored as accessToken and SQLite rejected it with
 //   "SQLite3 can only bind numbers, strings, bigints, buffers, and null".
-test("windsurf mapTokens: accepts object {accessToken} and returns string accessToken", () => {
+// Current implementation maps the pasted token to `apiKey` with `authType: "apikey"`.
+test("windsurf mapTokens: accepts object {accessToken} and returns apiKey record", () => {
   const provider = getProvider("windsurf");
   const mapped = provider.mapTokens({ accessToken: "sk-ws-test-token-1234567890" });
-  assert.equal(typeof mapped.accessToken, "string");
-  assert.equal(mapped.accessToken, "sk-ws-test-token-1234567890");
+  assert.equal(mapped.authType, "apikey");
+  assert.equal(mapped.apiKey, "sk-ws-test-token-1234567890");
+  assert.equal(mapped.accessToken, null);
   assert.equal(mapped.refreshToken, null);
+  assert.equal(mapped.expiresIn, null);
 });
 
-test("devin-cli mapTokens: accepts object {accessToken} and returns string accessToken", () => {
+test("devin-cli mapTokens: accepts object {accessToken} and returns apiKey record", () => {
   const provider = getProvider("devin-cli");
   const mapped = provider.mapTokens({ accessToken: "sk-devin-test-token-1234567890" });
-  assert.equal(typeof mapped.accessToken, "string");
-  assert.equal(mapped.accessToken, "sk-devin-test-token-1234567890");
+  assert.equal(mapped.authType, "apikey");
+  assert.equal(mapped.apiKey, "sk-devin-test-token-1234567890");
+  assert.equal(mapped.accessToken, null);
+  assert.equal(mapped.refreshToken, null);
+  assert.equal(mapped.expiresIn, null);
 });

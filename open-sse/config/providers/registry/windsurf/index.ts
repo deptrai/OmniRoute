@@ -17,16 +17,15 @@ export const windsurfProvider: RegistryEntry = {
   // dot-notation = OmniRoute ID; executor MODEL_ALIAS_MAP maps it to Windsurf modelUid.
   models: [
     // ── Cognition / SWE ──────────────────────────────────────────────────
-    { id: "swe-1.8-fast", name: "SWE-1.8 Fast" },
-    { id: "swe-1.8", name: "SWE-1.8" },
-    { id: "swe-1.7-fast", name: "SWE-1.7 Fast" },
-    { id: "swe-1.7-max", name: "SWE-1.7 Max" },
+    // swe-1.7 is the Max tier; swe-1.7-lightning is the paid fast variant.
+    { id: "swe-1.7", name: "SWE-1.7 (Max)" },
+    { id: "swe-1.7-max", name: "SWE-1.7 Max (alias)" },
     { id: "swe-1.7-medium", name: "SWE-1.7 Medium" },
-    { id: "swe-1.7", name: "SWE-1.7" },
+    { id: "swe-1.7-lightning", name: "SWE-1.7 Lightning" },
+    { id: "swe-1.7-lightning-medium", name: "SWE-1.7 Lightning Medium" },
+    { id: "swe-1.7-fast", name: "SWE-1.7 Fast (legacy alias)" },
     { id: "swe-1.6-fast", name: "SWE-1.6 Fast" },
     { id: "swe-1.6", name: "SWE-1.6" },
-    { id: "swe-1.5-fast", name: "SWE-1.5 Fast" },
-    { id: "swe-1.5", name: "SWE-1.5" },
     // ── Claude Opus 4.8 — effort-tiered ─────────────────────────────────
     { id: "claude-opus-4.8-max", name: "Claude Opus 4.8 Max", contextLength: 200000 },
     { id: "claude-opus-4.8-xhigh", name: "Claude Opus 4.8 XHigh", contextLength: 200000 },

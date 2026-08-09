@@ -12,7 +12,7 @@
  *   — placed in Metadata.api_key protobuf field of every request.
  *
  * Model IDs accepted by this executor (snake_case sent to Windsurf wire):
- *   Cognition SWE:  swe-1, swe-1-5, swe-1-6, swe-1-6-fast, swe-1-7, swe-1-7-fast, swe-1-8, swe-1-8-fast, swe-1-lite
+ *   Cognition SWE:  swe-1.6, swe-1.6-fast, swe-1.7, swe-1.7-medium, swe-1.7-lightning
  *   Claude:         claude-4-5-sonnet, claude-4-5-opus, claude-4-sonnet, claude-4-opus,
  *                   claude-3-7-sonnet, claude-3-7-sonnet-thinking
  *   Gemini:         gemini-2-5-pro, gemini-2-5-flash, gemini-3-0-pro, gemini-3-0-flash
@@ -57,16 +57,17 @@ const WS_LOCALE = "en-US";
 // This map normalises dot→dash for newer models and handles legacy aliases.
 const MODEL_ALIAS_MAP: Record<string, string> = {
   // ── SWE ─────────────────────────────────────────────────────────────────
-  "swe-1.8-fast": "swe-1-8-fast",
-  "swe-1.8": "swe-1-8",
-  "swe-1.7-fast": "swe-1-7-fast",
-  "swe-1.7-max": "swe-1-7-max",
-  "swe-1.7-medium": "swe-1-7-medium",
+  // Note: swe-1.7 is the "Max" tier in the Devin CLI catalog; swe-1.7-medium
+  // and swe-1.7-lightning are the only distinct variants. swe-1.7-max is an
+  // accepted alias, and swe-1.7-fast is a legacy alias for lightning.
   "swe-1.7": "swe-1-7",
+  "swe-1.7-medium": "swe-1-7-medium",
+  "swe-1.7-lightning": "swe-1-7-lightning",
+  "swe-1.7-lightning-medium": "swe-1-7-lightning-medium",
+  "swe-1.7-max": "swe-1-7", // alias: Max is the base model
+  "swe-1.7-fast": "swe-1-7-lightning", // legacy alias for lightning
   "swe-1.6-fast": "swe-1-6-fast",
   "swe-1.6": "swe-1-6",
-  "swe-1.5-fast": "swe-1p5", // fast variant
-  "swe-1.5": "swe-1p5",
   // ── Claude Opus 4.8 ──────────────────────────────────────────────────────
   "claude-opus-4.8-max": "claude-opus-4-8-max",
   "claude-opus-4.8-xhigh": "claude-opus-4-8-xhigh",
