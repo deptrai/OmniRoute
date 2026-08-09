@@ -1,0 +1,185 @@
+{
+  "repo_notes": [
+    {
+      "content": "OmniRoute is a local-first AI API routing gateway that unifies 237+ AI providers behind a single OpenAI-compatible endpoint on port 20128. It is a Next.js 16 (App Router) monorepo written in TypeScript (src/) and JavaScript (open-sse/, electron/), using better-sqlite3 for persistence (DATA_DIR defaults to ~/.omniroute/), Tailwind v4 for styling, next-intl for i18n (42 locales), Zod v4 for validation, and Electron for the desktop app. The repo has THREE top-level source roots that must all be documented: (1) src/ — Next.js app, API routes, DB layer, domain logic, UI dashboard; (2) open-sse/ — the core streaming/routing engine, handlers, executors, translators, services, MCP server; (3) electron/ — desktop wrapper. Do NOT treat open-sse/ as a leaf dependency — it is the heart of the system and contains ~115 service modules, the combo routing engine, all provider executors, format translators, and the MCP server (94 tools).",
+      "author": "OmniRoute maintainer"
+    },
+    {
+      "content": "PRIORITIZE the open-sse/ workspace in documentation. The request pipeline flows: src/app/api/v1/*/route.ts -> open-sse/handlers/chatCore.ts::handleChatCore() -> (optional) open-sse/services/combo.ts::handleComboChat() -> open-sse/translator/ -> open-sse/executors/ -> upstream provider fetch -> response translation -> SSE/JSON to client. The combo engine in open-sse/services/combo.ts implements 17 routing strategies (priority, weighted, round-robin, least-used, cost-optimized, p2c, context-relay, auto, lkgp, etc.) and resolveComboTargets() expands a combo into an ordered ResolvedComboTarget[]. Each target calls handleSingleModel() which wraps handleChatCore() with per-target circuit breaker checks.",
+      "author": "OmniRoute maintainer"
+    },
+    {
+      "content": "The data layer lives in src/lib/db/ with 83+ domain-specific SQLite modules (NOT a single file). core.ts provides getDbInstance() singleton with WAL journaling and 17 base tables. migrationRunner.ts applies versioned SQL files from db/migrations/ (106+ migrations) inside transactions, tracked in _omniroute_migrations. Each domain module owns specific tables: providers.ts -> provider_connections, combos.ts -> combos, models.ts -> models, apiKeys.ts -> api_keys, etc. src/lib/localDb.ts is a RE-EXPORT layer only — never add logic there. Encryption helpers protect sensitive fields (API keys, OAuth tokens) at rest.",
+      "author": "OmniRoute maintainer"
+    },
+    {
+      "content": "Provider categories: Free (3: Qoder AI, Qwen Code, Kiro AI), OAuth (14: Claude Code, Antigravity, Codex, GitHub Copilot, Cursor, Kimi Coding, Kilo Code, Cline, Qwen, Kiro, Qoder, Gemini, Windsurf, GitLab Duo), API Key (120+: OpenAI, Anthropic, Gemini, DeepSeek, Groq, xAI, Mistral, etc.), Self-Hosted (8+: LM Studio, vLLM, etc.), and Custom (openai-compatible-* / anthropic-compatible-* prefixes). Providers are registered in src/shared/constants/providers.ts with Zod validation at module load. Provider-specific executors live in open-sse/executors/ (base.ts, default.ts, cursor.ts, codex.ts, antigravity.ts, github.ts, kiro.ts, qoder.ts, vertex.ts, cloudflare-ai.ts, opencode.ts, pollinations.ts, puter.ts). The Windsurf provider (added v3.8) has its own executor with tool-call-loop detection for swe-1.7 and per-tool schema caps.",
+      "author": "OmniRoute maintainer"
+    },
+    {
+      "content": "Resilience is 3-layered: (1) Provider Circuit Breakers in open-sse/services/accountFallback.ts — 500/502/503/504 failures count toward a threshold that trips a breaker for providerCooldownMs; (2) Account Fallback — error classification differentiates CONTEXT_OVERFLOW (triggers model fallback) vs MODEL_ACCESS_DENIED (triggers account fallback); (3) Chat-level retries with exponential backoff in BaseExecutor. T5 intra-family fallback recomputes headers using only the fallback model id. modelFamilyFallback.ts and emergencyFallback.ts handle deeper fallback chains.",
+      "author": "OmniRoute maintainer"
+    },
+    {
+      "content": "The MCP server at open-sse/mcp-server/ exposes 94 tools (TOTAL_MCP_TOOL_COUNT in server.ts) across 3 transports (stdio via 'omniroute --mcp', SSE at /api/mcp/sse, Streamable HTTP at /api/mcp/stream). Tool sets: core (20), cache (2), compression (5), 1proxy (3), memory (3), skill (4), agentSkill (3), pool (6), gamification (8), plugin (8), notion (6), obsidian (22). 30 scopes control per-API-key access. Every invocation is audit-logged to the mcp_audit table. The A2A v0.3 server at src/lib/a2a/ implements JSON-RPC 2.0 with SSE streaming, a Task Manager (submitted->working->completed/failed/canceled with TTL cleanup), Agent Card at /.well-known/agent.json, and 6 skills (smartRouting, quotaManagement, providerDiscovery, costAnalysis, healthReport, listCapabilities).",
+      "author": "OmniRoute maintainer"
+    },
+    {
+      "content": "Prompt compression is a first-class subsystem in open-sse/services/compression/. Modes: off/lite/standard/aggressive/ultra/rtk/stacked. lite.ts has 5 techniques (collapseWhitespace, dedupSystemPrompt, compressToolResults, removeRedundantContent, replaceImageUrls) for 10-15% savings at <1ms. caveman.ts/cavemanRules.ts does semantic condensation with file-loaded language packs under compression/rules/. engines/rtk/ is rule-based terminal/tool-output compression with a JSON DSL (replace, match-output short-circuit, strip/keep, truncation, inline tests, trust-gated custom filters). strategySelector.ts picks the mode based on config > combo assignment > override > auto-trigger > default. DB settings in src/lib/db/compression.ts, combos in compressionCombos.ts.",
+      "author": "OmniRoute maintainer"
+    },
+    {
+      "content": "SECURITY-CRITICAL patterns that must be documented accurately: (1) Public upstream OAuth identifiers (Gemini/Antigravity/Windsurf client_id/secret + Firebase Web keys) MUST use resolvePublicCred() from open-sse/utils/publicCreds.ts, never string literals — see docs/security/PUBLIC_CREDS.md. (2) Error responses (HTTP/SSE/executor/MCP) MUST use buildErrorBody() or sanitizeErrorMessage() from open-sse/utils/error.ts, never raw err.stack/err.message — see docs/security/ERROR_SANITIZATION.md. (3) exec()/spawn() with runtime values MUST pass via env option, never string-interpolate — see src/mitm/cert/install.ts::updateNssDatabases. (4) Guardrails in src/lib/guardrails/ are hot-reloadable, fail-open, 3 built-in (pii-masker, prompt-injection, vision-bridge). pii-masker is OFF by default (PII_REDACTION_ENABLED/PII_RESPONSE_SANITIZATION both default false) — NEVER make PII default-on. (5) Authorization pipeline at src/server/authz/ classifies routes into PUBLIC/CLIENT_API/MANAGEMENT. (6) Prompt injection guard at src/middleware/promptInjectionGuard.ts is unique to chat completions (clones request).",
+      "author": "OmniRoute maintainer"
+    },
+    {
+      "content": "Doc accuracy is enforced in CI. The script scripts/check/check-fabricated-docs.mjs extracts every route path, env var, hook name, function name, and file reference from docs/**/*.md and verifies each against the codebase. Run via 'npm run check:docs-all'. Rule: if 'grep -rn theName src/ open-sse/ bin/' returns nothing, the name does not exist — do not document it. Every claim should cite real source (file.ts:line) not paraphrase. Live counts refresh with 'npm run check:docs-all' — never state provider/tool/migration counts from memory.",
+      "author": "OmniRoute maintainer"
+    }
+  ],
+  "pages": [
+    {
+      "title": "OmniRoute Overview",
+      "purpose": "High-level introduction: what OmniRoute is (unified AI routing gateway, 237+ providers, port 20128), the core value proposition (quota exhaustion + provider lock-in solutions, 4-tier fallback Subscription->API Key->Cheap->Free), 3 deployment modes (npm CLI, Electron desktop, Docker), and the monorepo layout (src/, open-sse/, electron/). Reference README.md, llm.txt, package.json."
+    },
+    {
+      "title": "System Architecture",
+      "purpose": "End-to-end architecture diagram and component map. Document the request pipeline from client -> Next.js route -> open-sse/handlers/chatCore.ts -> combo routing -> translator -> executor -> upstream -> response translation -> SSE. Show how src/, open-sse/, and electron/ relate. Reference docs/architecture/ARCHITECTURE.md and docs/architecture/REPOSITORY_MAP.md.",
+      "parent": "OmniRoute Overview"
+    },
+    {
+      "title": "Request Pipeline",
+      "purpose": "Deep dive into open-sse/handlers/chatCore.ts::handleChatCore() — the central entry point. Document cache check (semantic + signature), rate limit check (rateLimitManager), combo routing dispatch, translateRequest() call, executor selection, response translation, and Responses API transform stream. List all handlers in open-sse/handlers/ (chatCore, responsesHandler, embeddings, imageGeneration, videoGeneration, musicGeneration, audioSpeech, audioTranscription, moderations, rerank, search).",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Combo Routing Engine",
+      "purpose": "Document open-sse/services/combo.ts: handleComboChat() entry point, resolveComboTargets() expansion into ordered ResolvedComboTarget[], handleSingleModel() wrapper with per-target circuit breaker checks. Enumerate all 17 routing strategies from ROUTING_STRATEGY_VALUES in src/shared/constants/routingStrategies.ts (priority, weighted, fill-first, round-robin, P2C, random, least-used, reset-aware, reset-window, cost-optimized, strict-random, auto, lkgp, context-optimized, context-relay, comboStickyRoundRobinLimit, etc.). Reference docs/routing/AUTO-COMBO.md for the 12-factor auto-combo scoring.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Provider Registry and Executors",
+      "purpose": "Document src/shared/constants/providers.ts (Zod-validated provider registry), open-sse/config/providerRegistry.ts (model catalog), and open-sse/executors/ (base.ts BaseExecutor with buildUrl/buildHeaders/transformRequest/retry, default.ts DefaultExecutor for OpenAI-compatible, plus provider-specific: cursor, codex, antigravity, github, kiro, qoder, vertex, cloudflare-ai, opencode, pollinations, puter). Explain getExecutor() factory in executors/index.ts. Document the 5 steps to add a new provider (register, executor, translator, OAuth config, models).",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Windsurf Provider Integration",
+      "purpose": "Document the Windsurf provider (added v3.8): OAuth authentication flow, the swe-1.7 model family, tool-call-loop detection and breaking logic, per-tool schema caps, tool sanitization, CCR first-system-prompt keep behavior, 502 invalid_argument skip-retry for model family fallback, and hyphen-notation model ID fallback handling. Reference recent commits in git log (fix(windsurf) series). This page is critical because Windsurf is the most actively-developed provider integration.",
+      "parent": "Provider Registry and Executors"
+    },
+    {
+      "title": "Format Translation",
+      "purpose": "Document open-sse/translator/ — bidirectional hub-and-spoke conversion between OpenAI, Anthropic, Gemini, and Responses API formats. translateRequest(body, sourceFormat, targetFormat) detects source and applies the matching translator module. Response translation runs in reverse. Document open-sse/transformer/responsesTransformer.ts::createResponsesApiTransformStream() which converts Chat Completions SSE chunks into Responses API SSE events. Include Grok /v1/responses native support.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Resilience and Fallback",
+      "purpose": "Document the 3-layer resilience: (1) Provider Circuit Breakers in open-sse/services/accountFallback.ts (500/502/503/504 -> threshold -> providerCooldownMs); (2) Account Fallback error classification (CONTEXT_OVERFLOW -> model fallback, MODEL_ACCESS_DENIED -> account fallback); (3) Chat-level retries with exponential backoff in BaseExecutor. Cover T5 intra-family fallback (recomputes headers using only fallback model id), modelFamilyFallback.ts, emergencyFallback.ts, and quota preflight via getProviderCredentialsWithQuotaPreflight. Reference docs/architecture/RESILIENCE_GUIDE.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Data Layer and SQLite Schema",
+      "purpose": "Document src/lib/db/ — 83+ domain modules over better-sqlite3 with WAL. core.ts getDbInstance() singleton, SCHEMA_SQL with 17 base tables, rowToCamel/encryptConnectionFields helpers. migrationRunner.ts applies 106+ versioned SQL files from db/migrations/ in transactions, tracked in _omniroute_migrations. List key domain modules and their tables: providers.ts->provider_connections, combos.ts->combos, models.ts->models, apiKeys.ts->api_keys, secrets.ts, usage*.ts, quotaSnapshots.ts, creditBalance.ts, compressionAnalytics.ts, evals.ts, webhooks.ts, reasoningCache.ts, etc. Note that localDb.ts is re-export only.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "API Routes",
+      "purpose": "Document src/app/api/v1/ — Next.js App Router routes following the pattern: CORS preflight -> Zod body validation -> optional auth (extractApiKey/isValidApiKey) -> enforceApiKeyPolicy -> handler delegation to open-sse. List all routes: chat/completions (+ prompt injection guard), responses, embeddings, images/generations, audio/transcriptions, audio/speech, videos/generations, music/generations, moderations, rerank, search (12 providers). Note no global middleware — interception is route-specific. Reference docs/openapi.yaml and docs/reference/API_REFERENCE.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "MCP Server",
+      "purpose": "Document open-sse/mcp-server/ — 94 tools (TOTAL_MCP_TOOL_COUNT in server.ts). Tool sets: core (20: get_health, list_combos, switch_combo, check_quota, route_request, etc.), cache (2), compression (5), 1proxy (3), memory (3), skill (4), agentSkill (3), pool (6), gamification (8), plugin (8), notion (6), obsidian (22 — largest family). 3 transports: stdio (omniroute --mcp), SSE (/api/mcp/sse), Streamable HTTP (/api/mcp/stream). 30 scopes (OMNIROUTE_MCP_SCOPES) control per-API-key access. Audit log to mcp_audit table. createMcpServer() and startMcpStdio() from mcp-server/index.ts. Reference docs/frameworks/MCP-SERVER.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "A2A Protocol Server",
+      "purpose": "Document src/lib/a2a/ — JSON-RPC 2.0 with SSE streaming, Task Manager state machine (submitted->working->completed/failed/canceled with TTL cleanup), Agent Card at /.well-known/agent.json, 6 skills (smartRouting, quotaManagement, providerDiscovery, costAnalysis, healthReport, listCapabilities). JSON-RPC methods: message/send (sync), message/stream (SSE), tasks/get, tasks/cancel dispatched via POST /a2a. Reference docs/frameworks/A2A-SERVER.md and docs/frameworks/AGENT_PROTOCOLS_GUIDE.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Prompt Compression Pipeline",
+      "purpose": "Document open-sse/services/compression/ — modes (off/lite/standard/aggressive/ultra/rtk/stacked). lite.ts 5 techniques for 10-15% savings at <1ms. caveman.ts/cavemanRules.ts semantic condensation with language packs under compression/rules/. engines/rtk/ rule-based terminal/tool-output compression with JSON DSL (replace, match-output short-circuit, strip/keep, truncation, inline tests, trust-gated custom filters). engines/registry.ts registers engines and powers stacked pipelines. strategySelector.ts priority: assigned combo > override > auto-trigger > default. stats.ts per-request tracking. DB: src/lib/db/compression.ts, compressionCombos.ts. API: src/app/api/settings/compression/, src/app/api/compression/*.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Memory System",
+      "purpose": "Document src/lib/memory/ — extraction, injection, retrieval, summarization, and store modules for persistent conversational memory across sessions. Cross-cutting: affects MCP tools (memory_search, memory_add, memory_clear), request pipeline, and A2A skills. Reference docs/frameworks/MEMORY.md and the memory-engine e2e test at tests/e2e/memory-engine.spec.ts.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Skills System",
+      "purpose": "Document src/lib/skills/ — registry.ts (DB-backed skill registration/discovery with metadata), executor.ts (execution engine with timeout/retry), sandbox.ts (isolation for custom skills with resource/time limits), built-in skills (quota management, routing), interception/injection (pre/post processing in pipeline or context injection into prompts). Reference docs/frameworks/SKILLS.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Guardrails and Security",
+      "purpose": "Document src/lib/guardrails/ (hot-reloadable, fail-open, 3 built-in: pii-masker, prompt-injection, vision-bridge). pii-masker OFF by default (PII_REDACTION_ENABLED/PII_RESPONSE_SANITIZATION both default false) — NEVER make PII default-on. Request opt-out via x-omniroute-disabled-guardrails header. Document security patterns: resolvePublicCred() for public OAuth creds (docs/security/PUBLIC_CREDS.md), buildErrorBody()/sanitizeErrorMessage() for error responses (docs/security/ERROR_SANITIZATION.md), exec()/spawn() env-option rule, authorization pipeline (src/server/authz/ classify->policies->enforce, 3 route classes PUBLIC/CLIENT_API/MANAGEMENT), prompt injection guard (src/middleware/promptInjectionGuard.ts, chat completions only). Reference docs/security/GUARDRAILS.md, docs/security/STEALTH_GUIDE.md, docs/architecture/AUTHZ_GUIDE.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Authentication and Authorization",
+      "purpose": "Document API key management (src/lib/db/apiKeys.ts, registeredKeys.ts, sessionAccountAffinity.ts), OAuth flows for 14 providers (src/lib/oauth/constants/oauth.ts), the authorization pipeline at src/server/authz/ (classify routes into PUBLIC/CLIENT_API/MANAGEMENT, enforce policies), REQUIRE_API_KEY env control, and API key policy enforcement (enforceApiKeyPolicy). Reference docs/architecture/AUTHZ_GUIDE.md.",
+      "parent": "Guardrails and Security"
+    },
+    {
+      "title": "Dashboard UI",
+      "purpose": "Document src/app/(dashboard)/ — Next.js App Router dashboard pages: providers management (page.tsx, ProviderCard.tsx), combos management, endpoint (MCP/A2A tabs inside /dashboard/endpoint, NOT standalone routes), usage/analytics, health monitoring, logs/audit, cost tracking, media generation UI, combo management UI, gamification/leaderboard. Document provider connection lifecycle states (active/error/expired/cooldown) and the test endpoint /api/providers/[id]/test with classifyFailure utility.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Electron Desktop Application",
+      "purpose": "Document electron/ — cross-platform desktop wrapper (Windows, macOS, Linux). Native OS data directory, server.env config (vs .env for npm CLI). Build via npm run electron:build, dev via npm run electron:dev. Standalone assembly via scripts/build/prepare-electron-standalone.mjs. Reference docs/guides/ELECTRON_GUIDE.md and electron/package.json.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "CLI and Tools",
+      "purpose": "Document bin/ — the omniroute CLI. Commands including --mcp (stdio MCP server), server start/stop, provider/combo management. Environment configuration via .env (npm CLI) vs server.env (Electron). MITM proxy at src/mitm/ (certificate management, DNS handling, target routing — see src/mitm/cert/install.ts::updateNssDatabases for the env-option exec pattern). OpenCode integration. Reference docs/guides/SETUP_GUIDE.md and docs/guides/USER_GUIDE.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Internationalization",
+      "purpose": "Document src/i18n/ — next-intl with 42 locales, message files in src/i18n/messages/*.json. i18n runtime, tooling, and CI checks. Refresh count with 'ls src/i18n/messages/*.json | wc -l'. Reference docs/guides/I18N.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Deployment and Operations",
+      "purpose": "Document the 3 deployment modes: npm CLI (DATA_DIR ~/.omniroute/, .env config), Electron (native OS path, server.env), Docker (DATA_DIR /app/data mount, env vars). Build pipeline: npm run build -> .build/next/ intermediates -> dist/ assembled bundle via assembleStandalone. Release: npm run build:release (clean + dist/BUILD_SHA sentinel). VPS deploy rsync dist/ to /usr/lib/node_modules/omniroute/app/. Podman/Quadlet via contrib/podman. Tunnels: src/lib/cloudflaredTunnel.ts, ngrokTunnel.ts, Tailscale Funnel. Backup/recovery via src/lib/db/backup.ts. Reference docs/ops/RELEASE_CHECKLIST.md, docs/ops/TUNNELS_GUIDE.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Webhooks and Events",
+      "purpose": "Document src/lib/webhookDispatcher.ts — HMAC-signed delivery, exponential backoff, auto-disable after 10 failures, 7 event types. Reference docs/frameworks/WEBHOOKS.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Cloud Agents",
+      "purpose": "Document src/lib/cloudAgent/ — CloudAgentBase abstract class + 3 agents (codex-cloud, devin, jules). Tasks persisted in cloud_agent_tasks table. Management auth required. Reference docs/frameworks/CLOUD_AGENT.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Evals and Benchmarking",
+      "purpose": "Document src/lib/evals/ — generic eval framework with evalRunner.ts and runtime.ts. Targets: combo / model / suite-default. Reference docs/frameworks/EVALS.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Reasoning Replay",
+      "purpose": "Document the hybrid in-memory + SQLite cache for reasoning_content in src/lib/db/reasoningCache.ts + open-sse/services/reasoningCache.ts. Re-injects reasoning on multi-turn for strict providers (DeepSeek V4, Kimi K2, Qwen-Thinking, GLM, xiaomi-mimo). Reference docs/routing/REASONING_REPLAY.md.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Domain Policy Engine",
+      "purpose": "Document src/domain/ — policy engine modules: policyEngine.ts, comboResolver.ts, costRules.ts, degradation.ts, fallbackPolicy.ts, lockoutPolicy.ts, modelAvailability.ts, providerExpiration.ts, quotaCache.ts, responses.ts, configAudit.ts. Explain how these compose into routing/fallback decisions.",
+      "parent": "System Architecture"
+    },
+    {
+      "title": "Build, Test, and Quality Gates",
+      "purpose": "Document the build/test commands (npm run dev, build, build:release, start, lint, typecheck:core, typecheck:noimplicit:core, check, check:cycles, electron:dev, electron:build). Test runners: Node.js native (node --import tsx/esm --test), vitest (MCP/autoCombo), Playwright e2e, protocol e2e, ecosystem. 35 quality gates with allowlist policy (docs/architecture/QUALITY_GATES.md). Doc accuracy: scripts/check/check-fabricated-docs.mjs + npm run check:docs-all. Circular dependency check: npm run check:cycles. Reference CONTRIBUTING.md for PR gates.",
+      "parent": "OmniRoute Overview"
+    },
+    {
+      "title": "Fork and Upstream Workflow",
+      "purpose": "Document that this repo is a fork of diegosouzapw/OmniRoute. Fork-only operational changes (GHCR image publishing, personal deployment, local automation) must stay out of upstream PRs. PR branches must start from upstream/main (git fetch upstream; git switch -c <branch> upstream/main). Cherry-pick only intended changes. NEVER close a contributor's PR after using their code — always merge via GitHub so they get credit (see .agents/workflows/review-prs.md)."
+    }
+  ]
+}
