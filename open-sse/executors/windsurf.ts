@@ -956,8 +956,14 @@ function openAIMessagesToWs(messages: OpenAIMessage[]): WsChatMessage[] {
     // Likewise, "assistant" (CHAT_MSG_SRC.ASSISTANT=3) is rejected — the
     // ApiServer only accepts USER=1 in chat_message_prompts. Convert
     // assistant → user to preserve conversation context without 502.
+    // Tool-result messages (role=tool, source=4=TOOL) are also rejected,
+    // so convert them to user. For assistant messages with tool_calls,
+    // flatten the tool calls into the text content so Windsurf sees a
+    // plain USER message (tool_calls on a USER source are rejected with
+    // invalid_argument). Tool results are likewise flattened into content.
     const rawRole = String(m.role || "user");
-    const role = rawRole === "system" || rawRole === "assistant" ? "user" : rawRole;
+    const role =
+      rawRole === "system" || rawRole === "assistant" || rawRole === "tool" ? "user" : rawRole;
     let content = "";
     if (typeof m.content === "string") {
       content = m.content;
@@ -969,16 +975,23 @@ function openAIMessagesToWs(messages: OpenAIMessage[]): WsChatMessage[] {
         }
       }
     }
-    // Convert OpenAI tool_calls → Windsurf ChatToolCall (field 6 in ChatMessagePrompt)
-    let toolCalls: WsToolCall[] | undefined;
+    // Flatten assistant tool_calls into text content — Windsurf rejects
+    // tool_calls on USER-source messages with invalid_argument.
     if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-      toolCalls = m.tool_calls.map((tc) => ({
-        id: tc.id || `call-${randomUUID()}`,
-        name: tc.function?.name || "",
-        argumentsJson: tc.function?.arguments || "{}",
-      }));
+      const tcText = m.tool_calls
+        .map(
+          (tc) =>
+            `[assistant called tool ${tc.function?.name || ""} with args ${tc.function?.arguments || "{}"}]`
+        )
+        .join(" ");
+      content = content ? `${content}\n${tcText}` : tcText;
     }
-    out.push({ role, content, toolCallId: m.tool_call_id, toolCalls });
+    // Flatten tool result into text with a clear label so the model
+    // understands this is the tool output, not a new user request.
+    if (rawRole === "tool" && content) {
+      content = `[tool result: ${content}]`;
+    }
+    out.push({ role, content, toolCallId: m.tool_call_id });
   }
   return out;
 }
