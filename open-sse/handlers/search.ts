@@ -21,6 +21,7 @@ import { freeWebSearch } from "../services/freeWebSearch.ts";
 import { saveCallLog } from "@/lib/usageDb";
 import { safeOutboundFetch } from "@/shared/network/safeOutboundFetch";
 import { getProviderCredentials } from "@/sse/services/auth";
+import { updateProviderConnection } from "@/lib/db/providers";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
@@ -97,6 +98,15 @@ interface SearchHandlerOptions {
   credentials: Record<string, any>;
   alternateProvider?: string;
   alternateCredentials?: Record<string, any> | null;
+  /**
+   * Optional lazy resolver for the alternate provider. Called only when the
+   * primary fails and a failover is attempted, avoiding DB calls on cache
+   * hits and successful primary attempts.
+   */
+  resolveAlternate?: () => Promise<{
+    provider: string;
+    credentials: Record<string, any> | null;
+  } | null>;
   log?: any;
 }
 
@@ -1096,6 +1106,7 @@ async function tryZaiMCPProvider(
   providerSpecificData: Record<string, unknown> | undefined,
   startTime: number,
   globalStartTime: number,
+  credentials: Record<string, any>,
   log?: any
 ): Promise<SearchHandlerResult> {
   const { query, searchType, maxResults } = params;
@@ -1140,6 +1151,8 @@ async function tryZaiMCPProvider(
       /* non-critical — logging must not block search response */
     });
 
+    await recordSearchConnectionOutcome(credentials, true, 200);
+
     return {
       success: true,
       data: {
@@ -1178,6 +1191,8 @@ async function tryZaiMCPProvider(
       /* non-critical — logging must not block search response */
     });
 
+    await recordSearchConnectionOutcome(credentials, false, isTimeout ? 504 : 502, err.message);
+
     return {
       success: false,
       status: isTimeout ? 504 : 502,
@@ -1208,6 +1223,86 @@ function normalizeResponse(
   return { results: [], totalResults: null };
 }
 
+/**
+ * Convert an upstream Retry-After header (seconds or HTTP-date) into a number
+ * of seconds from now. Falls back to 0 for unrecognized values.
+ */
+function parseRetryAfterSeconds(retryAfter: string | number | null): number {
+  if (!retryAfter) return 0;
+  if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
+    return Math.max(0, Math.ceil(retryAfter));
+  }
+  const asDate = new Date(retryAfter).getTime();
+  if (Number.isFinite(asDate)) {
+    const delta = Math.ceil((asDate - Date.now()) / 1000);
+    return Math.max(0, delta);
+  }
+  const asSeconds = Number.parseInt(String(retryAfter), 10);
+  if (Number.isFinite(asSeconds)) return Math.max(0, asSeconds);
+  return 0;
+}
+
+/**
+ * Persist connection health state to provider_connections so the global
+ * credential selector can penalize failing connections across requests.
+ */
+async function recordSearchConnectionOutcome(
+  credentials: Record<string, any> | null,
+  success: boolean,
+  status: number,
+  errorMessage?: string,
+  retryAfter?: string
+) {
+  const connectionId = credentials?.connectionId || credentials?.id;
+  if (!connectionId) return;
+
+  const now = new Date().toISOString();
+  if (success) {
+    // Only write on success if there is an error to clear — avoids unnecessary
+    // DB updates for the happy path.
+    if (
+      credentials.lastError ||
+      credentials.lastErrorAt ||
+      credentials.errorCode ||
+      credentials.testStatus === "error"
+    ) {
+      await updateProviderConnection(connectionId, {
+        lastError: null,
+        lastErrorAt: null,
+        lastErrorType: null,
+        lastErrorSource: null,
+        errorCode: null,
+        testStatus: "active",
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  const updates: Record<string, any> = {
+    lastError: errorMessage ? errorMessage.slice(0, 500) : `Search error ${status}`,
+    lastErrorAt: now,
+    lastErrorType: "search",
+    lastErrorSource: "upstream",
+    errorCode: status,
+  };
+
+  if (status === 429 && retryAfter) {
+    const retryAfterSec = parseRetryAfterSeconds(retryAfter);
+    if (retryAfterSec > 0) {
+      updates.rateLimitedUntil = new Date(Date.now() + retryAfterSec * 1000).toISOString();
+      updates.backoffLevel = (credentials?.backoffLevel || 0) + 1;
+    }
+  } else if (status === 401) {
+    updates.testStatus = "expired";
+  } else if (status === 403) {
+    updates.testStatus = "banned";
+  } else {
+    updates.testStatus = "error";
+  }
+
+  await updateProviderConnection(connectionId, updates).catch(() => {});
+}
+
 // ── Main Handler ────────────────────────────────────────────────────────
 
 function isCredentialsAllRateLimited(
@@ -1226,6 +1321,100 @@ function isCredentialsUnavailable(credentials: Record<string, any> | null): bool
   return isCredentialsAllRateLimited(credentials) || isCredentialsAllExpired(credentials);
 }
 
+/**
+ * Try a provider, cycling through its available connections when a failure is
+ * retriable. Returns the best result and whether the provider was globally
+ * unavailable (all rate-limited or all expired) — needed by handleSearch to
+ * decide whether to failover to the alternate provider.
+ */
+async function tryProviderWithCycling(
+  config: SearchProviderConfig,
+  requestParams: Omit<SearchRequestParams, "token">,
+  credentials: Record<string, any> | null,
+  startTime: number,
+  excludedConnectionIds: string[],
+  log?: any
+): Promise<{ result: SearchHandlerResult; wasUnavailable: boolean }> {
+  let currentCredentials = credentials;
+  let result: SearchHandlerResult;
+  let wasUnavailable = false;
+
+  for (let attempt = 0; attempt <= MAX_SAME_PROVIDER_RETRIES; attempt++) {
+    if (Date.now() - startTime >= GLOBAL_TIMEOUT_MS) {
+      result = {
+        success: false,
+        status: 504,
+        error: `Search timeout: exceeded ${GLOBAL_TIMEOUT_MS}ms cycling ${config.id} connections`,
+      };
+      break;
+    }
+
+    const currentAllRateLimited = isCredentialsAllRateLimited(currentCredentials);
+    const currentAllExpired = isCredentialsAllExpired(currentCredentials);
+    if (currentAllRateLimited || currentAllExpired) {
+      wasUnavailable = true;
+      result = {
+        success: false,
+        status: currentAllExpired ? 401 : 429,
+        error: `All ${config.id} accounts are ${currentAllExpired ? "expired" : "rate limited"}`,
+        retryAfter: currentAllRateLimited ? currentCredentials.retryAfter : undefined,
+        retryAfterHuman: currentAllRateLimited ? currentCredentials.retryAfterHuman : undefined,
+      };
+    } else {
+      result = await tryProvider(config, requestParams, currentCredentials, startTime, log);
+    }
+
+    if (result.success) return { result, wasUnavailable };
+
+    if (Date.now() - startTime >= GLOBAL_TIMEOUT_MS) break;
+
+    if (NON_RETRIABLE.has(result.status || 0) && !currentAllExpired) break;
+
+    // A 404 from a non-SearXNG provider is a real routing/model error; don't
+    // waste retries cycling through its connections.
+    if (result.status === 404 && config.id !== "searxng-search") break;
+
+    // No more connections to try for this provider
+    if (isCredentialsUnavailable(currentCredentials)) break;
+
+    // Do not fetch another connection on the final allowed attempt.
+    if (attempt >= MAX_SAME_PROVIDER_RETRIES) break;
+
+    const failedConnectionId = currentCredentials?.connectionId || currentCredentials?.id;
+    if (failedConnectionId) {
+      excludedConnectionIds.push(failedConnectionId);
+    }
+
+    const nextCredentials = await getProviderCredentials(config.id, null, null, null, {
+      excludeConnectionIds: excludedConnectionIds,
+    }).catch((err: any) => {
+      if (log) {
+        log.error(
+          "SEARCH",
+          `${config.id} credential resolution failed at attempt ${attempt + 1}: ${
+            err?.message || "unknown"
+          }`
+        );
+      }
+      return null;
+    });
+
+    if (!nextCredentials) break;
+
+    if (log) {
+      log.warn?.(
+        "SEARCH",
+        `${config.id} attempt ${attempt + 1} failed (${result.status}), ` +
+          `trying next connection (excluded=${excludedConnectionIds.length})`
+      );
+    }
+
+    currentCredentials = nextCredentials;
+  }
+
+  return { result: result!, wasUnavailable };
+}
+
 export async function handleSearch(options: SearchHandlerOptions): Promise<SearchHandlerResult> {
   const {
     query,
@@ -1242,6 +1431,7 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
     credentials,
     alternateProvider,
     alternateCredentials,
+    resolveAlternate,
     log,
   } = options;
   const startTime = Date.now();
@@ -1262,8 +1452,15 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
     };
   }
 
-  // 3. Get alternate config for failover (pre-resolved by route)
-  const alternateConfig = alternateProvider ? getSearchProvider(alternateProvider) : null;
+  // 3. Alternate failover may be pre-resolved by the route, or resolved lazily
+  // only when the primary actually fails (saving DB calls on cache hits and
+  // successful primary attempts).
+  let alternateConfig: SearchProviderConfig | null = null;
+  let alternateCreds: Record<string, any> | null = null;
+  if (alternateProvider && alternateCredentials) {
+    alternateConfig = getSearchProvider(alternateProvider) || null;
+    alternateCreds = alternateCredentials;
+  }
 
   const requestParams = {
     query: cleanQuery,
@@ -1278,84 +1475,49 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
     providerOptions,
   };
 
-  let result: SearchHandlerResult;
-
   // 4. Try the provider, cycling through multiple connections for the same
   // provider when the current one fails with a retriable error. This enables
   // e.g. 3 SearXNG instances to back each other up within a single request.
-  const excludedConnectionIds: string[] = [];
-  let currentCredentials = credentials;
-  let primaryWasUnavailable = false;
-  for (let attempt = 0; attempt <= MAX_SAME_PROVIDER_RETRIES; attempt++) {
-    if (Date.now() - startTime >= GLOBAL_TIMEOUT_MS) {
-      result = {
-        success: false,
-        status: 504,
-        error: `Search timeout: exceeded ${GLOBAL_TIMEOUT_MS}ms cycling ${primaryConfig.id} connections`,
-      };
-      break;
-    }
+  const primaryExcluded: string[] = [];
+  const { result, wasUnavailable: primaryWasUnavailable } = await tryProviderWithCycling(
+    primaryConfig,
+    requestParams,
+    credentials,
+    startTime,
+    primaryExcluded,
+    log
+  );
 
-    const currentAllRateLimited = isCredentialsAllRateLimited(currentCredentials);
-    const currentAllExpired = isCredentialsAllExpired(currentCredentials);
-    if (currentAllRateLimited || currentAllExpired) {
-      primaryWasUnavailable = true;
-      result = {
-        success: false,
-        status: currentAllExpired ? 401 : 429,
-        error: `All ${primaryConfig.id} accounts are ${currentAllExpired ? "expired" : "rate limited"}`,
-        retryAfter: currentAllRateLimited ? currentCredentials.retryAfter : undefined,
-        retryAfterHuman: currentAllRateLimited ? currentCredentials.retryAfterHuman : undefined,
-      };
-    } else {
-      result = await tryProvider(primaryConfig, requestParams, currentCredentials, startTime, log);
-    }
+  if (result.success) return result;
 
-    if (result.success) return result;
-
-    if (Date.now() - startTime >= GLOBAL_TIMEOUT_MS) break;
-
-    if (NON_RETRIABLE.has(result.status || 0) && !currentAllExpired) break;
-
-    // A 404 from a non-SearXNG provider is a real routing/model error; don't
-    // waste retries cycling through its connections.
-    if (result.status === 404 && primaryConfig.id !== "searxng-search") break;
-
-    // No more connections to try for this provider
-    if (isCredentialsUnavailable(currentCredentials)) break;
-
-    // Do not fetch another connection on the final allowed attempt.
-    if (attempt >= MAX_SAME_PROVIDER_RETRIES) break;
-
-    const failedConnectionId = currentCredentials?.connectionId || currentCredentials?.id;
-    if (failedConnectionId) {
-      excludedConnectionIds.push(failedConnectionId);
-    }
-
-    const nextCredentials = await getProviderCredentials(primaryConfig.id, null, null, null, {
-      excludeConnectionIds: excludedConnectionIds,
-    }).catch(() => null);
-
-    if (!nextCredentials) break;
-
-    if (log) {
-      log.warn?.(
-        "SEARCH",
-        `${primaryConfig.id} attempt ${attempt + 1} failed (${result.status}), ` +
-          `trying next connection (excluded=${excludedConnectionIds.length})`
-      );
-    }
-
-    currentCredentials = nextCredentials;
-  }
-
-  // 5. Failover to alternate provider (pre-resolved by route) for retriable errors.
+  // 5. Failover to alternate provider for retriable errors. Resolve lazily if
+  // it was not pre-resolved by the route.
   // A 404 from a non-SearXNG provider is a real routing/model error and should
   // not trigger an alternate failover.
   const isNonSearxng404 = result.status === 404 && primaryConfig.id !== "searxng-search";
   if (
+    (!alternateConfig || !alternateCreds) &&
+    resolveAlternate &&
+    (!NON_RETRIABLE.has(result.status || 0) || primaryWasUnavailable) &&
+    !isNonSearxng404 &&
+    Date.now() - startTime < GLOBAL_TIMEOUT_MS
+  ) {
+    try {
+      const resolved = await resolveAlternate();
+      if (resolved?.provider && resolved.credentials) {
+        alternateConfig = getSearchProvider(resolved.provider) || null;
+        alternateCreds = resolved.credentials;
+      }
+    } catch (err: any) {
+      if (log) {
+        log.error("SEARCH", `Alternate resolver failed: ${err?.message || "unknown"}`);
+      }
+    }
+  }
+
+  if (
     alternateConfig &&
-    alternateCredentials &&
+    alternateCreds &&
     (!NON_RETRIABLE.has(result.status || 0) || primaryWasUnavailable) &&
     !isNonSearxng404 &&
     Date.now() - startTime < GLOBAL_TIMEOUT_MS
@@ -1367,11 +1529,13 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
       );
     }
 
-    const fallbackResult = await tryProvider(
+    const alternateExcluded: string[] = [];
+    const { result: fallbackResult } = await tryProviderWithCycling(
       alternateConfig,
       requestParams,
-      alternateCredentials,
+      alternateCreds,
       startTime,
+      alternateExcluded,
       log
     );
 
@@ -1379,7 +1543,7 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
 
     // If the alternate also failed, surface its error/status instead of the
     // stale primary result so the client sees the most recent cause.
-    result = fallbackResult;
+    return fallbackResult;
   }
 
   return result;
@@ -1527,6 +1691,7 @@ async function tryProvider(
       providerSpecificData,
       startTime,
       globalStartTime,
+      credentials,
       log
     );
   }
@@ -1597,6 +1762,13 @@ async function tryProvider(
       if (retryAfter) {
         result.retryAfter = retryAfter;
       }
+      await recordSearchConnectionOutcome(
+        credentials,
+        false,
+        response.status,
+        errorText,
+        retryAfter
+      );
       return result;
     }
 
@@ -1621,6 +1793,8 @@ async function tryProvider(
     }).catch(() => {
       /* non-critical — logging must not block search response */
     });
+
+    await recordSearchConnectionOutcome(credentials, true, 200);
 
     return {
       success: true,
@@ -1659,6 +1833,8 @@ async function tryProvider(
     }).catch(() => {
       /* non-critical — logging must not block search response */
     });
+
+    await recordSearchConnectionOutcome(credentials, false, isTimeout ? 504 : 502, err.message);
 
     return {
       success: false,

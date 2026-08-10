@@ -140,6 +140,22 @@ export async function getOrCoalesce<T>(
 }
 
 /**
+ * Remove a single cache entry (used when a stored result is no longer valid,
+ * e.g. a fallback result that should not shadow the primary provider's cache).
+ */
+export function deleteSearchCacheEntry(key: string): boolean {
+  return cache.delete(key);
+}
+
+/**
+ * Manually store a result in the cache.
+ */
+export function setSearchCacheEntry<T>(key: string, data: T, ttlMs: number): void {
+  evictIfNeeded();
+  cache.set(key, { data, expiresAt: Date.now() + ttlMs });
+}
+
+/**
  * Get cache statistics for monitoring.
  */
 export function getCacheStats(): { size: number; hits: number; misses: number } {

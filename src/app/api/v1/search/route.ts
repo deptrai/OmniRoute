@@ -20,6 +20,8 @@ import {
   computeCacheKey,
   getOrCoalesce,
   SEARCH_CACHE_DEFAULT_TTL_MS,
+  deleteSearchCacheEntry,
+  setSearchCacheEntry,
 } from "@omniroute/open-sse/services/searchCache.ts";
 import {
   isAllRateLimitedCredentials,
@@ -156,8 +158,6 @@ async function postHandler(request: Request, context: unknown) {
   }
 
   let credentials: Record<string, any> | null = null;
-  let alternateProviderId: string | undefined;
-  let alternateCredentials: Record<string, any> | null = null;
 
   // Tracks the first unavailable (rate-limited or expired) provider seen in
   // auto-select, so we can return a meaningful error if no usable provider exists.
@@ -177,41 +177,6 @@ async function postHandler(request: Request, context: unknown) {
         HTTP_STATUS.BAD_REQUEST,
         `No credentials configured for search provider: ${providerConfig.id}. Add an API key for "${providerConfig.id}" in the dashboard.`
       );
-    }
-
-    // Find an alternate provider for explicit-provider failover, so if all
-    // connections for the requested provider fail (e.g. all 3 SearXNG instances
-    // are rate-limited) we can still fall back to another configured provider.
-    const explicitOtherIds = Object.values(SEARCH_PROVIDERS)
-      .filter(
-        (provider) => !provider.fallbackOnly && supportsSearchType(provider, body.search_type)
-      )
-      .sort((a, b) => a.costPerQuery - b.costPerQuery)
-      .map((p) => p.id)
-      .filter((id) => id !== providerConfig.id);
-
-    for (const pid of explicitOtherIds) {
-      const altConfig = getSearchProvider(pid);
-      const altCreds = altConfig ? await resolveSearchExecutionCredentials(altConfig) : null;
-      if (isSearchCredentialUnavailable(altCreds)) continue;
-      if (altCreds) {
-        alternateProviderId = pid;
-        alternateCredentials = altCreds;
-        break;
-      }
-    }
-
-    if (!alternateProviderId) {
-      for (const provider of Object.values(SEARCH_PROVIDERS)) {
-        if (!provider.fallbackOnly || provider.id === providerConfig.id) continue;
-        if (!supportsSearchType(provider, body.search_type)) continue;
-        const fallbackCreds = await resolveSearchExecutionCredentials(provider);
-        if (fallbackCreds && !isSearchCredentialUnavailable(fallbackCreds)) {
-          alternateProviderId = provider.id;
-          alternateCredentials = fallbackCreds;
-          break;
-        }
-      }
     }
   } else {
     // Auto-select — try the resolved provider first, then iterate others by cost
@@ -252,6 +217,21 @@ async function postHandler(request: Request, context: unknown) {
     }
 
     if (!credentials) {
+      // Last-resort primary: a free no-key fallback provider such as
+      // duckduckgo-free can serve out-of-the-box search when no credentialed
+      // provider is available.
+      for (const provider of Object.values(SEARCH_PROVIDERS)) {
+        if (!provider.fallbackOnly || !supportsSearchType(provider, body.search_type)) continue;
+        const fallbackCreds = await resolveSearchExecutionCredentials(provider);
+        if (fallbackCreds && !isSearchCredentialUnavailable(fallbackCreds)) {
+          providerConfig = provider;
+          credentials = fallbackCreds;
+          break;
+        }
+      }
+    }
+
+    if (!credentials) {
       if (firstUnavailableCredentials) {
         if (isAllRateLimitedCredentials(firstUnavailableCredentials.credentials)) {
           return rateLimitedProviderResponse(
@@ -269,51 +249,49 @@ async function postHandler(request: Request, context: unknown) {
         `No credentials configured for any search provider. Add an API key for a search provider (${Object.keys(SEARCH_PROVIDERS).join(", ")}) in the dashboard.`
       );
     }
+  }
 
-    // Find alternate for failover — must bind credentials to the matched provider.
-    // Exclude fallback-only providers; they are only used by the last-resort step.
+  // Lazy alternate resolver — only called by handleSearch if the primary
+  // provider fails. This avoids DB credential lookups on cache hits and
+  // successful primary attempts.
+  const resolveAlternate = async () => {
     const otherIds = Object.values(SEARCH_PROVIDERS)
       .filter(
-        (provider) => !provider.fallbackOnly && supportsSearchType(provider, body.search_type)
+        (provider) =>
+          !provider.fallbackOnly &&
+          provider.id !== providerConfig.id &&
+          supportsSearchType(provider, body.search_type)
       )
       .sort((a, b) => a.costPerQuery - b.costPerQuery)
-      .map((p) => p.id)
-      .filter((id) => id !== providerConfig.id);
+      .map((p) => p.id);
 
     for (const pid of otherIds) {
       const altConfig = getSearchProvider(pid);
-      const creds = altConfig ? await resolveSearchExecutionCredentials(altConfig) : null;
-      if (isSearchCredentialUnavailable(creds)) continue;
-      if (creds) {
-        alternateProviderId = pid;
-        alternateCredentials = creds;
-        break;
+      const altCreds = altConfig ? await resolveSearchExecutionCredentials(altConfig) : null;
+      if (isSearchCredentialUnavailable(altCreds)) continue;
+      if (altCreds) {
+        return { provider: pid, credentials: altCreds };
       }
     }
 
-    // Last-resort: guarantee a free no-key fallback (e.g. duckduckgo-free) as the
-    // failover so out-of-the-box search still works when no credentialed provider
-    // is configured. Only used when no real alternate was found above.
-    if (!alternateProviderId) {
-      for (const provider of Object.values(SEARCH_PROVIDERS)) {
-        if (!provider.fallbackOnly || provider.id === providerConfig.id) continue;
-        if (!supportsSearchType(provider, body.search_type)) continue;
-        const fallbackCreds = await resolveSearchExecutionCredentials(provider);
-        if (fallbackCreds && !isSearchCredentialUnavailable(fallbackCreds)) {
-          alternateProviderId = provider.id;
-          alternateCredentials = fallbackCreds;
-          break;
-        }
+    for (const provider of Object.values(SEARCH_PROVIDERS)) {
+      if (!provider.fallbackOnly || provider.id === providerConfig.id) continue;
+      if (!supportsSearchType(provider, body.search_type)) continue;
+      const fallbackCreds = await resolveSearchExecutionCredentials(provider);
+      if (fallbackCreds && !isSearchCredentialUnavailable(fallbackCreds)) {
+        return { provider: provider.id, credentials: fallbackCreds };
       }
     }
-  }
+
+    return null;
+  };
 
   // Clamp max_results to provider limit
   const clampedMaxResults = Math.min(body.max_results, providerConfig.maxMaxResults);
 
-  // Cache key — includes all fields that affect results, including the
-  // pre-resolved alternate provider so a fallback result is not cached under
-  // the primary provider's key.
+  // Cache key — includes all fields that affect results. The alternate is left
+  // null here; if a fallback is actually used, the result is re-keyed under the
+  // actual provider after handleSearch returns.
   const cacheKey = computeCacheKey(
     body.query,
     providerConfig.id,
@@ -322,7 +300,7 @@ async function postHandler(request: Request, context: unknown) {
     body.country,
     body.language,
     { filters: body.filters, offset: body.offset, time_range: body.time_range },
-    alternateProviderId
+    undefined
   );
 
   const ttl = providerConfig.cacheTTLMs ?? SEARCH_CACHE_DEFAULT_TTL_MS;
@@ -343,8 +321,7 @@ async function postHandler(request: Request, context: unknown) {
         strictFilters: body.strict_filters,
         providerOptions: body.provider_options,
         credentials,
-        alternateProvider: alternateProviderId,
-        alternateCredentials,
+        resolveAlternate,
         log,
       });
 
@@ -359,6 +336,27 @@ async function postHandler(request: Request, context: unknown) {
 
       return result.data!;
     });
+
+    // If the response came from an alternate (fallback) provider, do not keep
+    // it under the primary provider's cache key. That would make the primary
+    // appear permanently down until TTL expires. Re-key it under the actual
+    // provider so direct alternate requests can still benefit, and future
+    // primary requests re-attempt the primary.
+    const actualProvider = searchResult.provider;
+    if (actualProvider && actualProvider !== providerConfig.id) {
+      deleteSearchCacheEntry(cacheKey);
+      const fallbackCacheKey = computeCacheKey(
+        body.query,
+        actualProvider,
+        body.search_type,
+        clampedMaxResults,
+        body.country,
+        body.language,
+        { filters: body.filters, offset: body.offset, time_range: body.time_range },
+        undefined
+      );
+      setSearchCacheEntry(fallbackCacheKey, searchResult, ttl);
+    }
 
     // Record cost for budget tracking (skip cache hits — no provider cost)
     if (!cached && policy.apiKeyInfo?.id && searchResult.usage?.search_cost_usd > 0) {

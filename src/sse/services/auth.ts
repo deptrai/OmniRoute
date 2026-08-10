@@ -86,6 +86,7 @@ interface ProviderConnectionView {
   consecutiveUseCount: number;
   priority: number;
   lastError: string | null;
+  lastErrorAt: string | null;
   lastErrorType: string | null;
   lastErrorSource: string | null;
   errorCode: string | number | null;
@@ -184,6 +185,7 @@ function toProviderConnection(value: unknown): ProviderConnectionView {
     consecutiveUseCount: toNumber(row.consecutiveUseCount, 0),
     priority: toNumber(row.priority, 999),
     lastError: toStringOrNull(row.lastError),
+    lastErrorAt: toStringOrNull(row.lastErrorAt),
     lastErrorType: toStringOrNull(row.lastErrorType),
     lastErrorSource: toStringOrNull(row.lastErrorSource),
     errorCode:
@@ -623,6 +625,16 @@ function getConnectionErrorPenalty(connection: ProviderConnectionView): number {
   const errorType = normalizeStatus(connection.lastErrorType);
   const errorSource = normalizeStatus(connection.lastErrorSource);
   const numericErrorCode = toNumber(connection.errorCode, 0);
+
+  // Decay old transient errors so a single failure does not permanently
+  // deprioritize a connection. Terminal statuses (banned/expired/etc.) are
+  // handled by isTerminalConnectionStatus in the filtering step.
+  if (connection.lastErrorAt) {
+    const ageMs = Date.now() - new Date(connection.lastErrorAt).getTime();
+    if (Number.isFinite(ageMs) && ageMs > 5 * 60 * 1000) {
+      return 0;
+    }
+  }
 
   let penalty = 0;
   if (connection.lastError) penalty += 6;
