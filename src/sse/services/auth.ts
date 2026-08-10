@@ -629,16 +629,10 @@ function getConnectionErrorPenalty(connection: ProviderConnectionView): number {
   // Decay old transient errors so a single failure does not permanently
   // deprioritize a connection. Terminal statuses (banned/expired/etc.) are
   // handled by isTerminalConnectionStatus in the filtering step.
-  if (connection.lastError || connection.lastErrorAt) {
-    if (!connection.lastErrorAt) {
-      // lastError without a timestamp is stale data; don't let it penalize
-      // the connection forever.
-      return 0;
-    }
-
+  if (connection.lastErrorAt) {
     const lastErrorMs = new Date(connection.lastErrorAt).getTime();
     if (!Number.isFinite(lastErrorMs) || lastErrorMs > Date.now()) {
-      // Unparseable or future-dated; treat as stale.
+      // Unparseable or future-dated; treat as stale — no penalty.
       return 0;
     }
 
