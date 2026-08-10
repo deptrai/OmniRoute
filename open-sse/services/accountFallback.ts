@@ -308,8 +308,6 @@ const RATE_LIMIT_INDICATOR_PATTERNS = [
   "requests per minute",
   "rate limit",
   "rate_limit",
-  "rpm",
-  "qps",
   "too many requests",
 ];
 

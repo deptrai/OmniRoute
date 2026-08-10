@@ -631,15 +631,14 @@ function getConnectionErrorPenalty(connection: ProviderConnectionView): number {
   // handled by isTerminalConnectionStatus in the filtering step.
   if (connection.lastErrorAt) {
     const lastErrorMs = new Date(connection.lastErrorAt).getTime();
-    if (!Number.isFinite(lastErrorMs) || lastErrorMs > Date.now()) {
-      // Unparseable or future-dated; treat as stale — no penalty.
-      return 0;
+    if (Number.isFinite(lastErrorMs) && lastErrorMs <= Date.now()) {
+      const ageMs = Date.now() - lastErrorMs;
+      if (Number.isFinite(ageMs) && ageMs > 5 * 60 * 1000) {
+        return 0;
+      }
     }
-
-    const ageMs = Date.now() - lastErrorMs;
-    if (Number.isFinite(ageMs) && ageMs > 5 * 60 * 1000) {
-      return 0;
-    }
+    // Corrupt/future-dated or recent timestamp — fall through and apply the
+    // penalty conservatively rather than treating unknown age as "stale".
   }
 
   let penalty = 0;

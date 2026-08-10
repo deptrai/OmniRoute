@@ -168,8 +168,10 @@ async function postHandler(request: Request, context: unknown) {
 
   if (body.provider) {
     // Explicit provider — single credential lookup (with fallback).
-    // Even if all accounts are rate-limited, pass the credentials through
-    // so handleSearch can fall back to an alternate provider.
+    // If every account is rate-limited, surface a 429 early so the caller knows
+    // the requested provider is unavailable and gets a Retry-After hint. Other
+    // unusable sentinel states (e.g. all-expired) are left to handleSearch to
+    // surface the appropriate terminal error code.
     const explicitCredentials = await resolveSearchExecutionCredentials(providerConfig);
     credentials = explicitCredentials;
     if (!credentials) {

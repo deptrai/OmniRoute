@@ -988,8 +988,10 @@ function openAIMessagesToWs(messages: OpenAIMessage[]): WsChatMessage[] {
     }
     // Flatten tool result into text with a clear label so the model
     // understands this is the tool output, not a new user request.
-    if (rawRole === "tool" && content) {
-      content = `[tool result: ${content}]`;
+    // Empty content is still labeled so Windsurf does not see a bare empty USER
+    // message and the model knows the tool call completed.
+    if (rawRole === "tool") {
+      content = `[tool result: ${content || "(empty)"}]`;
     }
     out.push({ role, content, toolCallId: m.tool_call_id });
   }

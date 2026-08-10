@@ -52,7 +52,15 @@ function sanitize(headers: Record<string, unknown>): Record<string, unknown> {
       .replace(/Bearer .+/, "Bearer <TOK>")
       .replace(/sk-test-APIKEY|tok-test-ACCESS/g, "<CRED>")
       .replace(/kimi-\d{10,}/g, "kimi-<TS>")
-      .replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "<UUID>");
+      .replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "<UUID>")
+      // Platform/arch/OS values depend on the machine that generated the snapshot
+      // (local Mac/arm64 vs CI Linux/x64). Normalize them so the golden stays
+      // stable across environments.
+      .replace(/\((Macintosh|X11);[^)]+\)/g, "(<PLATFORM>)")
+      .replace(/\((darwin|linux|windows|win32);[^)]+\)/gi, "(<PLATFORM>)")
+      .replace(/\b(arm64|x64|x86_64|amd64)\b/gi, "<ARCH>")
+      .replace(/\b(MacOS|macOS|Linux|Windows)\b/g, "<OS>")
+      .replace(/\b(darwin|linux|win32)\b/g, "<PLATFORM>");
     if (NODE_VERSION) s = s.split(NODE_VERSION).join("<NODE>");
     if (NODE_VERSION_BARE) s = s.split(NODE_VERSION_BARE).join("<NODE>");
     if (APP_VERSION) s = s.split(APP_VERSION).join("<APP>");

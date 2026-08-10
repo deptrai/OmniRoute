@@ -1249,10 +1249,12 @@ function normalizeResponse(
 
 /**
  * Convert an upstream Retry-After header (seconds or HTTP-date) into a number
- * of seconds from now. Falls back to 0 for unrecognized values.
+ * of seconds from now. Falls back to 1 second for unrecognized values so a 429
+ * without a usable hint still imposes a minimal cooldown and aligns with the
+ * retry hint we send to clients.
  */
 function parseRetryAfterSeconds(retryAfter: string | number | null): number {
-  if (!retryAfter) return 0;
+  if (!retryAfter) return 1;
 
   if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
     return Math.min(Math.max(0, Math.ceil(retryAfter)), MAX_RETRY_AFTER_SECONDS);
@@ -1282,7 +1284,7 @@ function parseRetryAfterSeconds(retryAfter: string | number | null): number {
     return Math.min(Math.max(0, asSeconds), MAX_RETRY_AFTER_SECONDS);
   }
 
-  return 0;
+  return 1;
 }
 
 /**
@@ -1312,12 +1314,12 @@ async function recordSearchConnectionOutcome(
     // DB updates for the happy path.  Never clear a terminal status (banned /
     // expired / credits_exhausted) from a single successful request, since that
     // would allow a known-bad connection to flap back into rotation.
-    const status = credentials?.testStatus;
+    const existingTestStatus = credentials?.testStatus;
     if (
       credentials?.lastError ||
       credentials?.lastErrorAt ||
       credentials?.errorCode ||
-      status === "error"
+      existingTestStatus === "error"
     ) {
       const updates: Record<string, any> = {
         lastError: null,
@@ -1326,7 +1328,7 @@ async function recordSearchConnectionOutcome(
         lastErrorSource: null,
         errorCode: null,
       };
-      updates.testStatus = isTerminalTestStatus(status) ? status : "active";
+      updates.testStatus = isTerminalTestStatus(existingTestStatus) ? existingTestStatus : "active";
 
       await updateProviderConnection(connectionId, updates).catch((err: any) => {
         if (log) {
@@ -1352,7 +1354,7 @@ async function recordSearchConnectionOutcome(
     const retryAfterSec = parseRetryAfterSeconds(retryAfter);
     if (retryAfterSec > 0) {
       updates.rateLimitedUntil = new Date(Date.now() + retryAfterSec * 1000).toISOString();
-      updates.backoffLevel = (credentials?.backoffLevel || 0) + 1;
+      updates.backoffLevel = Number(credentials?.backoffLevel ?? 0) + 1;
     }
   } else if (status === 401) {
     updates.testStatus = "expired";

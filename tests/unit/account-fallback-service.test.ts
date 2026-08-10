@@ -1164,6 +1164,26 @@ test("CREDITS_EXHAUSTED_SIGNALS no longer contains generic gRPC resource-exhaust
   assert.equal(CREDITS_EXHAUSTED_SIGNALS.includes("check quota"), false);
 });
 
+test("isCreditsExhausted distinguishes Windsurf weekly quota from Gemini RPM via rate-limit indicators", () => {
+  // Windsurf/Devin Connect weekly quota exhaustion: gRPC code "resource_exhausted"
+  // with no rate-limit wording in the message.
+  assert.equal(isCreditsExhausted("resource_exhausted"), true);
+  assert.equal(isCreditsExhausted("RESOURCE_EXHAUSTED: an internal error occurred"), true);
+
+  // Gemini RPM 429: "resource_exhausted" text plus explicit per-minute wording.
+  // Rate-limit indicators must suppress the "resource_exhausted" signal.
+  assert.equal(
+    isCreditsExhausted(
+      "RESOURCE_EXHAUSTED: Resource has been exhausted (queries per minute limit was reached)"
+    ),
+    false
+  );
+  assert.equal(
+    isCreditsExhausted("Resource has been exhausted (requests per minute limit: 10)"),
+    false
+  );
+});
+
 test("checkFallbackError classifies Gemini RPM 429 as RATE_LIMIT_EXCEEDED (not QUOTA_EXHAUSTED)", () => {
   // provider=null → preserveQuota429=true → text quota checks run
   // isCreditsExhausted must NOT match Gemini's "Resource has been exhausted"
