@@ -298,12 +298,38 @@ export function isAccountDeactivated(errorText: string): boolean {
   return getMergedBannedSignals().some((sig) => lower.includes(sig));
 }
 
+// Rate-limit indicators that rule out permanent credits exhaustion.
+// When present, "resource_exhausted" (gRPC status code) is a transient RPM/RPS
+// limit, not weekly quota depletion.
+const RATE_LIMIT_INDICATOR_PATTERNS = [
+  "per minute",
+  "per second",
+  "queries per minute",
+  "requests per minute",
+  "rate limit",
+  "rate_limit",
+  "rpm",
+  "qps",
+  "too many requests",
+];
+
+function hasRateLimitIndicator(lower: string): boolean {
+  return RATE_LIMIT_INDICATOR_PATTERNS.some((p) => lower.includes(p));
+}
+
 /**
  * T10: Returns true if response body indicates credits/quota are permanently exhausted.
  */
 export function isCreditsExhausted(errorText: string): boolean {
   const lower = String(errorText || "").toLowerCase();
-  return CREDITS_EXHAUSTED_SIGNALS.some((sig) => lower.includes(sig));
+  // "resource_exhausted" (gRPC status code string) appears in both Windsurf
+  // weekly quota exhaustion AND Antigravity/Gemini RPM 429. When rate-limit
+  // indicators are present, it's a transient per-minute limit — don't classify
+  // as credits exhausted.
+  const signals = hasRateLimitIndicator(lower)
+    ? CREDITS_EXHAUSTED_SIGNALS.filter((s) => s !== "resource_exhausted")
+    : CREDITS_EXHAUSTED_SIGNALS;
+  return signals.some((sig) => lower.includes(sig));
 }
 
 /**

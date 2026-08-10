@@ -14,12 +14,8 @@ const {
   seedConnection,
   settingsDb,
 } = harness;
-const { preScreenTargets } = await import(
-  "../../open-sse/services/combo.ts"
-);
-const { getCircuitBreaker } = await import(
-  "../../src/shared/utils/circuitBreaker.ts"
-);
+const { preScreenTargets } = await import("../../open-sse/services/combo.ts");
+const { getCircuitBreaker } = await import("../../src/shared/utils/circuitBreaker.ts");
 
 test.beforeEach(async () => {
   await resetStorage();
@@ -55,6 +51,7 @@ test("combo failover skips the cooled provider target on the next request", asyn
   let openaiCalls = 0;
   let claudeCalls = 0;
 
+  const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, init = {}) => {
     const headers = normalizeHeaders(init.headers);
     const authHeader = headers.authorization ?? headers.Authorization;
@@ -82,34 +79,38 @@ test("combo failover skips the cooled provider target on the next request", asyn
     throw new Error(`unexpected upstream headers: ${JSON.stringify(headers)}`);
   };
 
-  const firstResponse = await handleChat(
-    buildRequest({
-      body: {
-        model: "provider-cooldown-combo",
-        stream: false,
-        messages: [{ role: "user", content: "first combo request" }],
-      },
-    })
-  );
-  const firstBody = (await firstResponse.json()) as any;
+  try {
+    const firstResponse = await handleChat(
+      buildRequest({
+        body: {
+          model: "provider-cooldown-combo",
+          stream: false,
+          messages: [{ role: "user", content: "first combo request" }],
+        },
+      })
+    );
+    const firstBody = (await firstResponse.json()) as any;
 
-  const secondResponse = await handleChat(
-    buildRequest({
-      body: {
-        model: "provider-cooldown-combo",
-        stream: false,
-        messages: [{ role: "user", content: "second combo request" }],
-      },
-    })
-  );
-  const secondBody = (await secondResponse.json()) as any;
+    const secondResponse = await handleChat(
+      buildRequest({
+        body: {
+          model: "provider-cooldown-combo",
+          stream: false,
+          messages: [{ role: "user", content: "second combo request" }],
+        },
+      })
+    );
+    const secondBody = (await secondResponse.json()) as any;
 
-  assert.equal(firstResponse.status, 200);
-  assert.equal(secondResponse.status, 200);
-  assert.equal(firstBody.choices[0].message.content, "claude fallback handled it");
-  assert.equal(secondBody.choices[0].message.content, "claude fallback handled it");
-  assert.equal(openaiCalls, 1);
-  assert.equal(claudeCalls, 2);
+    assert.equal(firstResponse.status, 200);
+    assert.equal(secondResponse.status, 200);
+    assert.equal(firstBody.choices[0].message.content, "claude fallback handled it");
+    assert.equal(secondBody.choices[0].message.content, "claude fallback handled it");
+    assert.equal(openaiCalls, 1);
+    assert.equal(claudeCalls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("pre-screen marks target unavailable when circuit breaker is OPEN", async () => {

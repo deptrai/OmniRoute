@@ -1155,9 +1155,12 @@ test("isCreditsExhausted returns true for actual credits-exhausted signals", () 
 });
 
 test("CREDITS_EXHAUSTED_SIGNALS no longer contains generic gRPC resource-exhausted patterns", () => {
-  // These patterns were removed because they falsely matched Gemini RPM 429 errors
+  // These patterns were removed because they falsely matched Gemini RPM 429 errors.
+  // Note: "resource_exhausted" (underscore) IS allowed — it's the gRPC status code
+  // string that Windsurf/Devin Connect uses for weekly quota exhaustion, and it does
+  // NOT match Gemini's "Resource has been exhausted" (spaces) because includes() is
+  // substring-based.
   assert.equal(CREDITS_EXHAUSTED_SIGNALS.includes("resource has been exhausted"), false);
-  assert.equal(CREDITS_EXHAUSTED_SIGNALS.includes("resource_exhausted"), false);
   assert.equal(CREDITS_EXHAUSTED_SIGNALS.includes("check quota"), false);
 });
 

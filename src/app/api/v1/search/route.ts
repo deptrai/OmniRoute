@@ -178,6 +178,9 @@ async function postHandler(request: Request, context: unknown) {
         `No credentials configured for search provider: ${providerConfig.id}. Add an API key for "${providerConfig.id}" in the dashboard.`
       );
     }
+    if (isAllRateLimitedCredentials(credentials)) {
+      return rateLimitedProviderResponse(providerConfig.id, credentials);
+    }
   } else {
     // Auto-select — try the resolved provider first, then iterate others by cost
     const selectedCredentials = await resolveSearchExecutionCredentials(providerConfig);

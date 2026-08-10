@@ -19,6 +19,7 @@ export const MITM_TOOL_HOSTS: Record<string, string[]> = {
   copilot: ["api.githubcopilot.com", "copilot-proxy.githubusercontent.com"],
   codex: ["chatgpt.com"],
   cursor: ["api2.cursor.sh"],
+  windsurf: ["server.codeium.com"],
   zed: ["api.zed.dev"],
   "claude-code": ["api.anthropic.com"],
   "open-code": ["opencode.ai"],

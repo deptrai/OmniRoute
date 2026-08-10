@@ -54,6 +54,20 @@ function buildFetchMock(registration: {
 // A valid-looking Kiro refresh token (must start with "aorAAAAAG")
 const VALID_REFRESH_TOKEN = "aorAAAAAG-mock-refresh-token-for-tests";
 
+// Stub readCachedClientCredentials so tests don't pick up the developer's
+// real ~/.aws/sso/cache/ credentials (which would bypass the mocked fetch
+// and return authMethod="builder-id" instead of "imported").
+function withCachedClientStub<T>(service: KiroService, fn: () => Promise<T>): Promise<T> {
+  const stub = service as unknown as {
+    readCachedClientCredentials: () => Promise<null>;
+  };
+  const original = stub.readCachedClientCredentials;
+  stub.readCachedClientCredentials = () => Promise.resolve(null);
+  return fn().finally(() => {
+    stub.readCachedClientCredentials = original;
+  });
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 test("validateImportToken registers a client and returns clientId + clientSecret", async () => {
@@ -65,16 +79,18 @@ test("validateImportToken registers a client and returns clientId + clientSecret
   };
 
   await withMockedFetch(buildFetchMock(reg), async () => {
-    const result = await service.validateImportToken(VALID_REFRESH_TOKEN);
-    assert.equal(result.clientId, reg.clientId, "clientId should be returned");
-    assert.equal(result.clientSecret, reg.clientSecret, "clientSecret should be returned");
-    assert.equal(
-      result.clientSecretExpiresAt,
-      reg.clientSecretExpiresAt,
-      "clientSecretExpiresAt should be returned"
-    );
-    assert.equal(result.authMethod, "imported");
-    assert.equal(result.accessToken, "at-mock");
+    await withCachedClientStub(service, async () => {
+      const result = await service.validateImportToken(VALID_REFRESH_TOKEN);
+      assert.equal(result.clientId, reg.clientId, "clientId should be returned");
+      assert.equal(result.clientSecret, reg.clientSecret, "clientSecret should be returned");
+      assert.equal(
+        result.clientSecretExpiresAt,
+        reg.clientSecretExpiresAt,
+        "clientSecretExpiresAt should be returned"
+      );
+      assert.equal(result.authMethod, "imported");
+      assert.equal(result.accessToken, "at-mock");
+    });
   });
 });
 
@@ -96,21 +112,23 @@ test("validateImportToken succeeds without clientId when registerClient fails", 
       });
     },
     async () => {
-      // Should not throw even though registerClient fails
-      const result = await service.validateImportToken(VALID_REFRESH_TOKEN);
-      assert.equal(
-        result.accessToken,
-        "at-degraded",
-        "import should succeed with a degraded token"
-      );
-      assert.equal(result.authMethod, "imported");
-      // clientId must not be set — the connection degrades to shared social-auth path
-      assert.equal(result.clientId, undefined, "clientId should be absent on degraded import");
-      assert.equal(
-        result.clientSecret,
-        undefined,
-        "clientSecret should be absent on degraded import"
-      );
+      await withCachedClientStub(service, async () => {
+        // Should not throw even though registerClient fails
+        const result = await service.validateImportToken(VALID_REFRESH_TOKEN);
+        assert.equal(
+          result.accessToken,
+          "at-degraded",
+          "import should succeed with a degraded token"
+        );
+        assert.equal(result.authMethod, "imported");
+        // clientId must not be set — the connection degrades to shared social-auth path
+        assert.equal(result.clientId, undefined, "clientId should be absent on degraded import");
+        assert.equal(
+          result.clientSecret,
+          undefined,
+          "clientSecret should be absent on degraded import"
+        );
+      });
     }
   );
 
@@ -142,16 +160,18 @@ test("two validateImportToken calls return different clientIds when registerClie
   };
 
   await withMockedFetch(mockFetch, async () => {
-    const result1 = await service.validateImportToken(VALID_REFRESH_TOKEN);
-    const result2 = await service.validateImportToken(VALID_REFRESH_TOKEN);
+    await withCachedClientStub(service, async () => {
+      const result1 = await service.validateImportToken(VALID_REFRESH_TOKEN);
+      const result2 = await service.validateImportToken(VALID_REFRESH_TOKEN);
 
-    assert.notEqual(
-      result1.clientId,
-      result2.clientId,
-      "each import call should receive a distinct clientId for session isolation"
-    );
-    assert.equal(result1.clientId, "client-alpha");
-    assert.equal(result2.clientId, "client-beta");
+      assert.notEqual(
+        result1.clientId,
+        result2.clientId,
+        "each import call should receive a distinct clientId for session isolation"
+      );
+      assert.equal(result1.clientId, "client-alpha");
+      assert.equal(result2.clientId, "client-beta");
+    });
   });
 });
 
