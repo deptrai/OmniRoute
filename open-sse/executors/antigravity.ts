@@ -394,6 +394,21 @@ export function processAntigravitySSEPayload(
     const candidate = parsed?.response?.candidates?.[0];
     if (candidate?.content?.parts) {
       for (const part of candidate.content.parts) {
+        // Native Gemini function-call parts: { functionCall: { name, args } }
+        // These parts have no `text` field, so the text branch below skips them.
+        // Without this, tool-call responses are silently dropped and the request
+        // surfaces as "Provider returned empty content" (502).
+        if (
+          part.functionCall &&
+          typeof part.functionCall === "object" &&
+          typeof part.functionCall.name === "string"
+        ) {
+          addAntigravityTextualToolCall(collected, {
+            name: part.functionCall.name,
+            args: part.functionCall.args ?? {},
+          });
+          continue;
+        }
         if (typeof part.text === "string" && !part.thought && !part.thoughtSignature) {
           const textualToolCall = parseAntigravityTextualToolCall(part.text);
           if (textualToolCall) {
