@@ -345,6 +345,8 @@ async function postHandler(request: Request, context: unknown) {
     const actualProvider = searchResult.provider;
     if (actualProvider && actualProvider !== providerConfig.id) {
       deleteSearchCacheEntry(cacheKey);
+      const fallbackConfig = getSearchProvider(actualProvider);
+      const fallbackTtl = fallbackConfig?.cacheTTLMs ?? SEARCH_CACHE_DEFAULT_TTL_MS;
       const fallbackCacheKey = computeCacheKey(
         body.query,
         actualProvider,
@@ -355,7 +357,7 @@ async function postHandler(request: Request, context: unknown) {
         { filters: body.filters, offset: body.offset, time_range: body.time_range },
         undefined
       );
-      setSearchCacheEntry(fallbackCacheKey, searchResult, ttl);
+      setSearchCacheEntry(fallbackCacheKey, searchResult, fallbackTtl);
     }
 
     // Record cost for budget tracking (skip cache hits — no provider cost)

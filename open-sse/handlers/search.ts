@@ -122,6 +122,19 @@ const NON_RETRIABLE = new Set([400, 401, 403]);
 // Cap same-provider connection retries to avoid runaway loops
 const MAX_SAME_PROVIDER_RETRIES = 5;
 
+// Don't start a provider attempt if less than this much global budget remains;
+// otherwise a near-deadline fetch is almost guaranteed to abort and can unfairly
+// mark a healthy connection as 504.
+const MIN_PROVIDER_TIMEOUT_MS = 250;
+
+// Time budget reserved for resolving and attempting an alternate provider.  We
+// skip failover if the remaining global window is too small to be useful.
+const MIN_ALTERNATE_BUDGET_MS = 500;
+
+// Cap Retry-After values to avoid treating a mis-parsed year as a multi-century
+// ban (matches open-sse/utils/error.ts upstream-error parsing).
+const MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60;
+
 // ── Input Sanitization ──────────────────────────────────────────────────
 
 // Control characters that should never appear in search queries
@@ -1112,7 +1125,7 @@ async function tryZaiMCPProvider(
   const { query, searchType, maxResults } = params;
 
   const remainingGlobal = GLOBAL_TIMEOUT_MS - (Date.now() - globalStartTime);
-  if (remainingGlobal <= 0) {
+  if (remainingGlobal < MIN_PROVIDER_TIMEOUT_MS) {
     return {
       success: false,
       status: 504,
@@ -1151,7 +1164,9 @@ async function tryZaiMCPProvider(
       /* non-critical — logging must not block search response */
     });
 
-    await recordSearchConnectionOutcome(credentials, true, 200);
+    recordSearchConnectionOutcome(credentials, true, 200, undefined, undefined, log).catch(() => {
+      /* non-critical — DB update must not block search response */
+    });
 
     return {
       success: true,
@@ -1191,7 +1206,16 @@ async function tryZaiMCPProvider(
       /* non-critical — logging must not block search response */
     });
 
-    await recordSearchConnectionOutcome(credentials, false, isTimeout ? 504 : 502, err.message);
+    recordSearchConnectionOutcome(
+      credentials,
+      false,
+      isTimeout ? 504 : 502,
+      err.message,
+      undefined,
+      log
+    ).catch(() => {
+      /* non-critical — DB update must not block search response */
+    });
 
     return {
       success: false,
@@ -1229,16 +1253,35 @@ function normalizeResponse(
  */
 function parseRetryAfterSeconds(retryAfter: string | number | null): number {
   if (!retryAfter) return 0;
+
   if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
-    return Math.max(0, Math.ceil(retryAfter));
+    return Math.min(Math.max(0, Math.ceil(retryAfter)), MAX_RETRY_AFTER_SECONDS);
   }
-  const asDate = new Date(retryAfter).getTime();
+
+  const raw = String(retryAfter).trim();
+
+  // Retry-After is most commonly a number of seconds.  Try that first so a
+  // string like "3600" is not mis-parsed as a year by new Date().
+  if (/^\d+$/.test(raw)) {
+    const asSeconds = Number.parseInt(raw, 10);
+    if (Number.isFinite(asSeconds)) {
+      return Math.min(Math.max(0, asSeconds), MAX_RETRY_AFTER_SECONDS);
+    }
+  }
+
+  // HTTP-date form (e.g. "Wed, 21 Oct 2015 07:28:00 GMT").
+  const asDate = new Date(raw).getTime();
   if (Number.isFinite(asDate)) {
     const delta = Math.ceil((asDate - Date.now()) / 1000);
-    return Math.max(0, delta);
+    return Math.min(Math.max(0, delta), MAX_RETRY_AFTER_SECONDS);
   }
-  const asSeconds = Number.parseInt(String(retryAfter), 10);
-  if (Number.isFinite(asSeconds)) return Math.max(0, asSeconds);
+
+  // Last-resort: leading numeric token (e.g. "Retry-After: 120, try later").
+  const asSeconds = Number.parseInt(raw, 10);
+  if (Number.isFinite(asSeconds)) {
+    return Math.min(Math.max(0, asSeconds), MAX_RETRY_AFTER_SECONDS);
+  }
+
   return 0;
 }
 
@@ -1246,12 +1289,19 @@ function parseRetryAfterSeconds(retryAfter: string | number | null): number {
  * Persist connection health state to provider_connections so the global
  * credential selector can penalize failing connections across requests.
  */
+function isTerminalTestStatus(status: unknown): boolean {
+  return ["banned", "expired", "credits_exhausted"].includes(
+    typeof status === "string" ? status.toLowerCase() : ""
+  );
+}
+
 async function recordSearchConnectionOutcome(
   credentials: Record<string, any> | null,
   success: boolean,
   status: number,
   errorMessage?: string,
-  retryAfter?: string
+  retryAfter?: string,
+  log?: any
 ) {
   const connectionId = credentials?.connectionId || credentials?.id;
   if (!connectionId) return;
@@ -1259,21 +1309,33 @@ async function recordSearchConnectionOutcome(
   const now = new Date().toISOString();
   if (success) {
     // Only write on success if there is an error to clear — avoids unnecessary
-    // DB updates for the happy path.
+    // DB updates for the happy path.  Never clear a terminal status (banned /
+    // expired / credits_exhausted) from a single successful request, since that
+    // would allow a known-bad connection to flap back into rotation.
+    const status = credentials?.testStatus;
     if (
-      credentials.lastError ||
-      credentials.lastErrorAt ||
-      credentials.errorCode ||
-      credentials.testStatus === "error"
+      credentials?.lastError ||
+      credentials?.lastErrorAt ||
+      credentials?.errorCode ||
+      status === "error"
     ) {
-      await updateProviderConnection(connectionId, {
+      const updates: Record<string, any> = {
         lastError: null,
         lastErrorAt: null,
         lastErrorType: null,
         lastErrorSource: null,
         errorCode: null,
-        testStatus: "active",
-      }).catch(() => {});
+      };
+      updates.testStatus = isTerminalTestStatus(status) ? status : "active";
+
+      await updateProviderConnection(connectionId, updates).catch((err: any) => {
+        if (log) {
+          log.error(
+            "SEARCH",
+            `Failed to clear connection error state for ${connectionId}: ${err?.message || "unknown"}`
+          );
+        }
+      });
     }
     return;
   }
@@ -1300,7 +1362,14 @@ async function recordSearchConnectionOutcome(
     updates.testStatus = "error";
   }
 
-  await updateProviderConnection(connectionId, updates).catch(() => {});
+  await updateProviderConnection(connectionId, updates).catch((err: any) => {
+    if (log) {
+      log.error(
+        "SEARCH",
+        `Failed to persist connection error state for ${connectionId}: ${err?.message || "unknown"}`
+      );
+    }
+  });
 }
 
 // ── Main Handler ────────────────────────────────────────────────────────
@@ -1385,9 +1454,18 @@ async function tryProviderWithCycling(
       excludedConnectionIds.push(failedConnectionId);
     }
 
-    const nextCredentials = await getProviderCredentials(config.id, null, null, null, {
-      excludeConnectionIds: excludedConnectionIds,
-    }).catch((err: any) => {
+    // Cycle through connections belonging to the actual credential provider.
+    // Search providers that reuse chat credentials (e.g. perplexity-search ->
+    // perplexity) must query the DB provider, not the search provider id.
+    const nextCredentials = await getProviderCredentials(
+      currentCredentials?.provider || config.id,
+      null,
+      null,
+      null,
+      {
+        excludeConnectionIds: excludedConnectionIds,
+      }
+    ).catch((err: any) => {
       if (log) {
         log.error(
           "SEARCH",
@@ -1500,7 +1578,7 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
     resolveAlternate &&
     (!NON_RETRIABLE.has(result.status || 0) || primaryWasUnavailable) &&
     !isNonSearxng404 &&
-    Date.now() - startTime < GLOBAL_TIMEOUT_MS
+    Date.now() - startTime < GLOBAL_TIMEOUT_MS - MIN_ALTERNATE_BUDGET_MS
   ) {
     try {
       const resolved = await resolveAlternate();
@@ -1520,7 +1598,7 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
     alternateCreds &&
     (!NON_RETRIABLE.has(result.status || 0) || primaryWasUnavailable) &&
     !isNonSearxng404 &&
-    Date.now() - startTime < GLOBAL_TIMEOUT_MS
+    Date.now() - startTime < GLOBAL_TIMEOUT_MS - MIN_PROVIDER_TIMEOUT_MS
   ) {
     if (log) {
       log.warn(
@@ -1542,7 +1620,16 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
     if (fallbackResult.success) return fallbackResult;
 
     // If the alternate also failed, surface its error/status instead of the
-    // stale primary result so the client sees the most recent cause.
+    // stale primary result so the client sees the most recent cause.  Preserve
+    // the primary's retry hint when the alternate has none (e.g. alternate 502
+    // after a primary 429), so clients still get a useful cooldown signal.
+    if (!fallbackResult.retryAfter && result.retryAfter) {
+      fallbackResult.retryAfter = result.retryAfter;
+    }
+    if (!fallbackResult.retryAfterHuman && result.retryAfterHuman) {
+      fallbackResult.retryAfterHuman = result.retryAfterHuman;
+    }
+
     return fallbackResult;
   }
 
@@ -1566,7 +1653,7 @@ async function tryDuckDuckGoFreeProvider(
 ): Promise<SearchHandlerResult> {
   const { query, searchType, maxResults } = params;
   const remainingGlobal = GLOBAL_TIMEOUT_MS - (Date.now() - globalStartTime);
-  if (remainingGlobal <= 0) {
+  if (remainingGlobal < MIN_PROVIDER_TIMEOUT_MS) {
     return {
       success: false,
       status: 504,
@@ -1708,9 +1795,11 @@ async function tryProvider(
     };
   }
 
-  // Timeout: min of provider timeout and remaining global timeout
+  // Timeout: min of provider timeout and remaining global timeout, but never
+  // less than a useful floor to avoid aborting immediately and blaming the
+  // connection.
   const remainingGlobal = GLOBAL_TIMEOUT_MS - (Date.now() - globalStartTime);
-  if (remainingGlobal <= 0) {
+  if (remainingGlobal < MIN_PROVIDER_TIMEOUT_MS) {
     return {
       success: false,
       status: 504,
@@ -1762,13 +1851,16 @@ async function tryProvider(
       if (retryAfter) {
         result.retryAfter = retryAfter;
       }
-      await recordSearchConnectionOutcome(
+      recordSearchConnectionOutcome(
         credentials,
         false,
         response.status,
         errorText,
-        retryAfter
-      );
+        retryAfter,
+        log
+      ).catch(() => {
+        /* non-critical — DB update must not block search response */
+      });
       return result;
     }
 
@@ -1794,7 +1886,9 @@ async function tryProvider(
       /* non-critical — logging must not block search response */
     });
 
-    await recordSearchConnectionOutcome(credentials, true, 200);
+    recordSearchConnectionOutcome(credentials, true, 200, undefined, undefined, log).catch(() => {
+      /* non-critical — DB update must not block search response */
+    });
 
     return {
       success: true,
@@ -1834,7 +1928,16 @@ async function tryProvider(
       /* non-critical — logging must not block search response */
     });
 
-    await recordSearchConnectionOutcome(credentials, false, isTimeout ? 504 : 502, err.message);
+    recordSearchConnectionOutcome(
+      credentials,
+      false,
+      isTimeout ? 504 : 502,
+      err.message,
+      undefined,
+      log
+    ).catch(() => {
+      /* non-critical — DB update must not block search response */
+    });
 
     return {
       success: false,

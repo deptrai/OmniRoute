@@ -150,22 +150,60 @@ export async function writeStreamError(
   await writer.write(encoder.encode(`data: ${JSON.stringify(errorBody)}\n\n`));
 }
 
+const MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60;
+
 function normalizeRetryAfterSeconds(retryAfter?: string | number | Date | null): number {
+  if (retryAfter === null || retryAfter === undefined || retryAfter === "") {
+    return 1;
+  }
+
   if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
     if (retryAfter > 0 && retryAfter < 1_000_000_000) {
-      return Math.max(Math.ceil(retryAfter), 1);
+      return Math.min(Math.max(Math.ceil(retryAfter), 1), MAX_RETRY_AFTER_SECONDS);
     }
 
     const retryTimeMs = new Date(retryAfter).getTime();
     if (Number.isFinite(retryTimeMs)) {
-      return Math.max(Math.ceil((retryTimeMs - Date.now()) / 1000), 1);
+      return Math.min(
+        Math.max(Math.ceil((retryTimeMs - Date.now()) / 1000), 1),
+        MAX_RETRY_AFTER_SECONDS
+      );
     }
   }
 
-  if (retryAfter instanceof Date || typeof retryAfter === "string") {
-    const retryTimeMs = new Date(retryAfter).getTime();
+  if (retryAfter instanceof Date) {
+    const retryTimeMs = retryAfter.getTime();
     if (Number.isFinite(retryTimeMs)) {
-      return Math.max(Math.ceil((retryTimeMs - Date.now()) / 1000), 1);
+      return Math.min(
+        Math.max(Math.ceil((retryTimeMs - Date.now()) / 1000), 1),
+        MAX_RETRY_AFTER_SECONDS
+      );
+    }
+  }
+
+  if (typeof retryAfter === "string") {
+    const raw = retryAfter.trim();
+
+    // Retry-After headers are most commonly a number of seconds; parse that
+    // first so strings like "3600" are not misinterpreted as years.
+    if (/^\d+$/.test(raw)) {
+      const asSeconds = Number.parseInt(raw, 10);
+      if (Number.isFinite(asSeconds) && asSeconds > 0) {
+        return Math.min(asSeconds, MAX_RETRY_AFTER_SECONDS);
+      }
+    }
+
+    const retryTimeMs = new Date(raw).getTime();
+    if (Number.isFinite(retryTimeMs)) {
+      return Math.min(
+        Math.max(Math.ceil((retryTimeMs - Date.now()) / 1000), 1),
+        MAX_RETRY_AFTER_SECONDS
+      );
+    }
+
+    const asSeconds = Number.parseInt(raw, 10);
+    if (Number.isFinite(asSeconds) && asSeconds > 0) {
+      return Math.min(asSeconds, MAX_RETRY_AFTER_SECONDS);
     }
   }
 
@@ -497,7 +535,8 @@ export function formatProviderError(
   const message = error.message || "Unknown error";
   // Expose low-level cause (e.g. UND_ERR_SOCKET, ECONNRESET, ETIMEDOUT) for diagnosing fetch failures
   const cause = (error as { cause?: unknown }).cause;
-  const causeObj = cause && typeof cause === "object" ? (cause as Record<string, unknown>) : undefined;
+  const causeObj =
+    cause && typeof cause === "object" ? (cause as Record<string, unknown>) : undefined;
   const causeCode = typeof causeObj?.code === "string" ? causeObj.code : undefined;
   const causeMsg = typeof causeObj?.message === "string" ? causeObj.message : undefined;
   const causeStr =
