@@ -40,7 +40,8 @@ export function computeCacheKey(
   maxResults: number,
   country?: string,
   language?: string,
-  filters?: unknown
+  filters?: unknown,
+  alternateProvider?: string
 ): string {
   const normalized = normalizeQuery(query);
   const payload = JSON.stringify({
@@ -51,6 +52,7 @@ export function computeCacheKey(
     c: country || null,
     l: language || null,
     f: filters || null,
+    a: alternateProvider || null,
   });
   return createHash("sha256").update(payload).digest("hex");
 }
