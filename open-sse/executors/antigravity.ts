@@ -30,7 +30,12 @@ import {
   handleCreditsFailure,
 } from "../services/antigravityCredits.ts";
 import { persistCreditBalance, getAllPersistedCreditBalances } from "@/lib/db/creditBalance";
-import { setConnectionRateLimitUntil } from "@/lib/db/providers";
+import {
+  getProviderConnectionById,
+  setConnectionRateLimitUntil,
+  updateProviderConnection,
+} from "@/lib/db/providers";
+import { markAccountExhaustedFrom429 } from "@/domain/quotaCache";
 import { getMitmAlias } from "@/lib/db/models";
 import { obfuscateSensitiveWords } from "../services/antigravityObfuscation.ts";
 import { resolveAntigravityVersion } from "../services/antigravityVersion.ts";
@@ -362,9 +367,24 @@ function markCreditsExhausted(accountId: string): void {
  * cross-request and post-restart routing skips this connection until the
  * cooldown expires. Exported for unit testing. @internal
  */
-export function markConnectionQuotaExhausted(connectionId: string, retryAfterMs: number): void {
+export async function markConnectionQuotaExhausted(
+  connectionId: string,
+  retryAfterMs: number
+): Promise<void> {
   try {
     setConnectionRateLimitUntil(connectionId, Date.now() + retryAfterMs);
+
+    const connection = await getProviderConnectionById(connectionId);
+    if (connection) {
+      markAccountExhaustedFrom429(connectionId, String(connection.provider || ""));
+      updateProviderConnection(connectionId, {
+        testStatus: "unavailable",
+        lastError: "Antigravity quota exhausted",
+        lastErrorAt: new Date().toISOString(),
+        lastErrorType: "quota_exhausted",
+        errorCode: 429,
+      }).catch(() => {});
+    }
   } catch {
     // DB write failure must never crash the request path
   }
@@ -1448,7 +1468,7 @@ export class AntigravityExecutor extends BaseExecutor {
               );
 
               if (decision.kind === "full_quota_exhausted" && retryMs) {
-                markConnectionQuotaExhausted(accountId, retryMs);
+                void markConnectionQuotaExhausted(accountId, retryMs);
               }
 
               const creditsAlreadyInjected =

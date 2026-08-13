@@ -27,6 +27,42 @@ import {
   FULL_QUOTA_COOLDOWN_MS,
 } from "../../open-sse/services/antigravity429Engine.ts";
 import { markConnectionQuotaExhausted } from "../../open-sse/executors/antigravity.ts";
+const quotaCache = await import("../../src/domain/quotaCache.ts");
+
+test("setQuotaCache clears stale Antigravity quota cooldown when quota recovers", async () => {
+  const conn = await providersDb.createProviderConnection({
+    provider: "antigravity",
+    authType: "oauth",
+    name: "AG Test Recovery",
+  });
+  const connId = (conn as any).id;
+
+  await markConnectionQuotaExhausted(connId, FULL_QUOTA_COOLDOWN_MS);
+  // Give async updateProviderConnection a tick to land.
+  await new Promise((r) => setTimeout(r, 50));
+
+  assert.equal(
+    providersDb.isConnectionRateLimited(connId),
+    true,
+    "should start with a stale quota cooldown"
+  );
+
+  quotaCache.setQuotaCache(connId, "antigravity", {
+    "gemini-3.5-flash-high": { remainingPercentage: 100, resetAt: null },
+  });
+  await new Promise((r) => setTimeout(r, 50));
+
+  assert.equal(
+    providersDb.isConnectionRateLimited(connId),
+    false,
+    "stale quota cooldown should be cleared after quota recovers"
+  );
+
+  const refreshed = await providersDb.getProviderConnectionById(connId);
+  assert.equal(refreshed?.testStatus, "active", "connection should be active again");
+  assert.equal(refreshed?.lastError ?? null, null, "lastError should be cleared");
+  assert.equal(refreshed?.lastErrorType ?? null, null, "lastErrorType should be cleared");
+});
 
 test.after(() => {
   core.resetDbInstance();

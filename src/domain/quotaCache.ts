@@ -14,9 +14,12 @@
  */
 
 import { getUsageForProvider } from "@omniroute/open-sse/services/usage.ts";
-import { getProviderConnectionById, resolveProxyForConnection } from "@/lib/localDb";
+import { resolveProxyForConnection } from "@/lib/db/settings";
+import { getProviderConnectionById, updateProviderConnection } from "@/lib/db/providers";
+import { setConnectionRateLimitUntil } from "@/lib/db/providers/rateLimit";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { safePercentage } from "@/shared/utils/formatting";
+import { isAccountUnavailable } from "@omniroute/open-sse/services/accountFallback.ts";
 import {
   saveQuotaSnapshot,
   cleanupOldSnapshots,
@@ -204,6 +207,47 @@ function normalizeQuotas(rawQuotas: Record<string, any>): Record<string, QuotaIn
   return result;
 }
 
+/**
+ * Clear a stale DB-level quota cooldown when a fresh quota fetch shows the
+ * connection is no longer exhausted. This prevents the long `rate_limited_until`
+ * written by `markConnectionQuotaExhausted` from outliving the real upstream
+ * quota reset (e.g. Antigravity "Resets in Xh" hints that become stale).
+ */
+function clearStaleQuotaCooldownIfRecovered(
+  connectionId: string,
+  provider: string,
+  nowExhausted: boolean,
+  connection?: { rateLimitedUntil?: string | null; lastErrorType?: string | null } | null
+): void {
+  if (nowExhausted) return;
+  if (!connection?.rateLimitedUntil) return;
+
+  const lastErrorType = connection.lastErrorType;
+  const isQuotaCooldown = lastErrorType === "quota_exhausted" || !lastErrorType;
+  if (!isQuotaCooldown) return;
+  if (!isAccountUnavailable(connection.rateLimitedUntil)) return;
+
+  try {
+    setConnectionRateLimitUntil(connectionId, null);
+    updateProviderConnection(connectionId, {
+      testStatus: "active",
+      lastError: null,
+      lastErrorAt: null,
+      lastErrorType: null,
+      lastErrorSource: null,
+      errorCode: null,
+    }).catch(() => {});
+    console.log(
+      `[quotaCache] Cleared stale quota cooldown for ${provider}:${connectionId.slice(0, 8)}`
+    );
+  } catch (err) {
+    console.warn(
+      `[quotaCache] Failed to clear stale quota cooldown for ${connectionId.slice(0, 8)}:`,
+      err
+    );
+  }
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
@@ -216,6 +260,20 @@ export function setQuotaCache(
 ) {
   const quotas = normalizeQuotas(rawQuotas);
   const exhausted = isExhausted(quotas);
+
+  // When a connection's quota recovers, clear any stale DB-level cooldown that
+  // was set by the full-quota path. Without this the connection can stay blocked
+  // for hours after the upstream quota has actually reset.
+  if (!exhausted) {
+    getProviderConnectionById(connectionId)
+      .then((connection) =>
+        clearStaleQuotaCooldownIfRecovered(connectionId, provider, exhausted, connection)
+      )
+      .catch((err) => {
+        console.warn("[quotaCache] Failed to read connection for cooldown cleanup:", err);
+      });
+  }
+
   // #4438 — capture the prior entry BEFORE overwriting the cache so we can skip
   // redundant snapshot writes for idle connections whose quota didn't change.
   const prior = cache.get(connectionId);
