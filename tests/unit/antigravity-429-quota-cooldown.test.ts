@@ -29,6 +29,19 @@ import {
 import { markConnectionQuotaExhausted } from "../../open-sse/executors/antigravity.ts";
 const quotaCache = await import("../../src/domain/quotaCache.ts");
 
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 2000,
+  intervalMs = 20
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error("waitFor timeout");
+}
+
 test("setQuotaCache clears stale Antigravity quota cooldown when quota recovers", async () => {
   const conn = await providersDb.createProviderConnection({
     provider: "antigravity",
@@ -38,30 +51,24 @@ test("setQuotaCache clears stale Antigravity quota cooldown when quota recovers"
   const connId = (conn as any).id;
 
   await markConnectionQuotaExhausted(connId, FULL_QUOTA_COOLDOWN_MS);
-  // Give async updateProviderConnection a tick to land.
-  await new Promise((r) => setTimeout(r, 50));
-
-  assert.equal(
-    providersDb.isConnectionRateLimited(connId),
-    true,
-    "should start with a stale quota cooldown"
-  );
+  await waitFor(() => providersDb.isConnectionRateLimited(connId), 2000, 10);
 
   quotaCache.setQuotaCache(connId, "antigravity", {
     "gemini-3.5-flash-high": { remainingPercentage: 100, resetAt: null },
   });
-  await new Promise((r) => setTimeout(r, 50));
-
-  assert.equal(
-    providersDb.isConnectionRateLimited(connId),
-    false,
-    "stale quota cooldown should be cleared after quota recovers"
+  await waitFor(
+    async () => {
+      if (providersDb.isConnectionRateLimited(connId)) return false;
+      const c = await providersDb.getProviderConnectionById(connId);
+      return (
+        c?.testStatus === "active" &&
+        (c?.lastError ?? null) === null &&
+        (c?.lastErrorType ?? null) === null
+      );
+    },
+    2000,
+    10
   );
-
-  const refreshed = await providersDb.getProviderConnectionById(connId);
-  assert.equal(refreshed?.testStatus, "active", "connection should be active again");
-  assert.equal(refreshed?.lastError ?? null, null, "lastError should be cleared");
-  assert.equal(refreshed?.lastErrorType ?? null, null, "lastErrorType should be cleared");
 });
 
 test.after(() => {
@@ -122,7 +129,8 @@ test("markConnectionQuotaExhausted persists 24h cooldown; isConnectionRateLimite
     "should start as not rate-limited"
   );
 
-  markConnectionQuotaExhausted(connId, FULL_QUOTA_COOLDOWN_MS);
+  await markConnectionQuotaExhausted(connId, FULL_QUOTA_COOLDOWN_MS);
+  await waitFor(() => providersDb.isConnectionRateLimited(connId), 2000, 10);
 
   assert.equal(
     providersDb.isConnectionRateLimited(connId),

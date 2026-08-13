@@ -22,6 +22,7 @@ import {
   antigravityUserAgent,
 } from "../services/antigravityHeaders.ts";
 import { classify429, decide429, type Decision } from "../services/antigravity429Engine.ts";
+import { PROVIDER_ERROR_TYPES } from "../services/errorClassifier.ts";
 import {
   injectCreditsField,
   shouldRetryWithCredits,
@@ -381,12 +382,15 @@ export async function markConnectionQuotaExhausted(
         testStatus: "unavailable",
         lastError: "Antigravity quota exhausted",
         lastErrorAt: new Date().toISOString(),
-        lastErrorType: "quota_exhausted",
+        lastErrorType: PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED,
         errorCode: 429,
       }).catch(() => {});
     }
-  } catch {
-    // DB write failure must never crash the request path
+  } catch (err) {
+    console.error(
+      `[antigravity] markConnectionQuotaExhausted failed for ${connectionId.slice(0, 8)}:`,
+      err
+    );
   }
 }
 

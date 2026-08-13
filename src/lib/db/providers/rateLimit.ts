@@ -36,6 +36,63 @@ export function setConnectionRateLimitUntil(connectionId: string, until: number 
 }
 
 /**
+ * T05: Clear a connection's cooldown and transient error fields only if the DB
+ * still matches the in-memory snapshot. This avoids a TOCTOU race where a fresh
+ * 429 sets a new cooldown between the read and the clear.
+ */
+export function clearQuotaCooldownIfUnchanged(
+  connectionId: string,
+  snapshot: {
+    testStatus?: string | null;
+    rateLimitedUntil?: unknown;
+    lastErrorType?: string | null;
+    lastErrorAt?: string | null;
+  }
+): boolean {
+  const db = getDbInstance() as unknown as DbLike;
+  const now = new Date().toISOString();
+
+  const conditions = ["id = ?"];
+  const params: unknown[] = [connectionId];
+
+  const addCond = (column: string, value: unknown) => {
+    if (value === null || value === undefined) {
+      conditions.push(`${column} IS NULL`);
+    } else {
+      conditions.push(`${column} = ?`);
+      params.push(value);
+    }
+  };
+
+  addCond("test_status", snapshot.testStatus);
+  addCond("rate_limited_until", snapshot.rateLimitedUntil);
+  addCond("last_error_type", snapshot.lastErrorType);
+  addCond("last_error_at", snapshot.lastErrorAt);
+
+  const result = db
+    .prepare(
+      `UPDATE provider_connections
+       SET rate_limited_until = NULL,
+           test_status = 'active',
+           backoff_level = 0,
+           last_error = NULL,
+           last_error_at = NULL,
+           last_error_type = NULL,
+           last_error_source = NULL,
+           error_code = NULL,
+           updated_at = ?
+       WHERE ${conditions.join(" AND ")}`
+    )
+    .run(now, ...params);
+
+  if (result.changes && result.changes > 0) {
+    invalidateDbCache("connections");
+    return true;
+  }
+  return false;
+}
+
+/**
  * T05: Check if a connection is currently rate-limited (DB-backed).
  * Use this before account selection to skip transiently rate-limited accounts.
  *

@@ -15,11 +15,16 @@
 
 import { getUsageForProvider } from "@omniroute/open-sse/services/usage.ts";
 import { resolveProxyForConnection } from "@/lib/db/settings";
-import { getProviderConnectionById, updateProviderConnection } from "@/lib/db/providers";
-import { setConnectionRateLimitUntil } from "@/lib/db/providers/rateLimit";
+import { getProviderConnectionById } from "@/lib/db/providers";
+import {
+  setConnectionRateLimitUntil,
+  clearQuotaCooldownIfUnchanged,
+} from "@/lib/db/providers/rateLimit";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { safePercentage } from "@/shared/utils/formatting";
 import { isAccountUnavailable } from "@omniroute/open-sse/services/accountFallback.ts";
+import { TERMINAL_CONNECTION_STATUSES } from "@/lib/quota/connectionRecovery";
+import { PROVIDER_ERROR_TYPES } from "@omniroute/open-sse/services/errorClassifier.ts";
 import {
   saveQuotaSnapshot,
   cleanupOldSnapshots,
@@ -217,29 +222,51 @@ function clearStaleQuotaCooldownIfRecovered(
   connectionId: string,
   provider: string,
   nowExhausted: boolean,
-  connection?: { rateLimitedUntil?: string | null; lastErrorType?: string | null } | null
+  connection?: {
+    testStatus?: string | null;
+    rateLimitedUntil?: string | number | null;
+    lastErrorType?: string | null;
+    lastErrorAt?: string | null;
+  } | null
 ): void {
   if (nowExhausted) return;
   if (!connection?.rateLimitedUntil) return;
 
+  // Never clear terminal states (banned / expired / credits_exhausted).
+  // Some 402 paths set testStatus="credits_exhausted" while lastErrorType is
+  // "quota_exhausted" from classifyProviderError, so a testStatus guard is
+  // essential. Ref: src/lib/quota/connectionRecovery.ts TERMINAL_CONNECTION_STATUSES
+  const testStatus = (connection.testStatus || "").trim().toLowerCase();
+  if (TERMINAL_CONNECTION_STATUSES.has(testStatus)) {
+    console.log(
+      `[quotaCache] Skipped stale cooldown clear for terminal ${testStatus} on ${provider}:${connectionId.slice(0, 8)}`
+    );
+    return;
+  }
+
   const lastErrorType = connection.lastErrorType;
-  const isQuotaCooldown = lastErrorType === "quota_exhausted" || !lastErrorType;
+  const isQuotaCooldown = lastErrorType === PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED || !lastErrorType;
   if (!isQuotaCooldown) return;
-  if (!isAccountUnavailable(connection.rateLimitedUntil)) return;
+  if (!isAccountUnavailable(String(connection.rateLimitedUntil))) return;
 
   try {
-    setConnectionRateLimitUntil(connectionId, null);
-    updateProviderConnection(connectionId, {
-      testStatus: "active",
-      lastError: null,
-      lastErrorAt: null,
-      lastErrorType: null,
-      lastErrorSource: null,
-      errorCode: null,
-    }).catch(() => {});
-    console.log(
-      `[quotaCache] Cleared stale quota cooldown for ${provider}:${connectionId.slice(0, 8)}`
-    );
+    const cleared = clearQuotaCooldownIfUnchanged(connectionId, {
+      testStatus: connection.testStatus,
+      rateLimitedUntil: connection.rateLimitedUntil,
+      lastErrorType,
+      lastErrorAt: connection.lastErrorAt,
+    });
+
+    if (cleared) {
+      console.log(
+        `[quotaCache] Cleared stale quota cooldown for ${provider}:${connectionId.slice(0, 8)} ` +
+          `(lastErrorType: ${lastErrorType || "null"}, rateLimitedUntil: ${connection.rateLimitedUntil})`
+      );
+    } else {
+      console.log(
+        `[quotaCache] Skipped stale quota cooldown for ${provider}:${connectionId.slice(0, 8)} — DB state changed concurrently`
+      );
+    }
   } catch (err) {
     console.warn(
       `[quotaCache] Failed to clear stale quota cooldown for ${connectionId.slice(0, 8)}:`,
