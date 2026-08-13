@@ -594,3 +594,10 @@ Only cherry-pick or reapply the changes intended for the upstream PR.
 - **Pricing data** syncs from LiteLLM via `src/lib/pricingSync.ts`
 - **Memory/Skills** are cross-cutting: affect MCP tools, request pipeline, and A2A skills
 - **⛔ NEVER close a contributor's PR** after using their code — always merge via GitHub so they get credit. See `.agents/workflows/review-prs.md` for full policy.
+
+---
+
+## Pattern reference
+
+When clearing a provider connection cooldown (quota, rate limit, or transient
+error), read `docs/patterns/cooldown-clearing.md` first.
