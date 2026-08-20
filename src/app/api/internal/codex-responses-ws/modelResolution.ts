@@ -47,57 +47,104 @@ export async function resolveCodexWsModelInfo(
   return codexInfo?.provider === "codex" ? codexInfo : info;
 }
 
+import { getProviderConnections } from "@/lib/localDb";
+
+async function isProviderActive(providerId: string): Promise<boolean> {
+  try {
+    const conns = (await getProviderConnections()) as Array<{
+      provider?: string;
+      isActive?: unknown;
+      is_active?: unknown;
+    }>;
+    if (!Array.isArray(conns)) return false;
+    return conns.some((c) => {
+      const active =
+        c.isActive !== false && c.isActive !== 0 && c.is_active !== false && c.is_active !== 0;
+      if (!active) return false;
+      if (c.provider === providerId) return true;
+      if (providerId === "postman" && (c.provider === "postman" || c.provider === "postman-agent"))
+        return true;
+      if (providerId === "codex" && (c.provider === "codex" || c.provider === "cx")) return true;
+      return false;
+    });
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Resolve a model ID for the HTTP Responses path, applying codex preference
- * for bare ChatGPT-style model IDs (those without a provider prefix).
+ * Resolve a model ID for the HTTP Responses path, applying codex/postman preference
+ * for bare ChatGPT-style model IDs (those without a provider prefix) or cx/ prefixed IDs.
  *
  * When the Codex CLI falls back from WebSocket to HTTP (#15492), it sends bare
  * model IDs like "gpt-5.5" to /v1/responses. Without this resolution, OmniRoute
- * routes them to openrouter/openai instead of the configured codex OAuth
- * connections, producing "No credentials for provider: openrouter".
+ * routes them to openrouter/openai instead of the configured codex/postman
+ * connections.
  *
  * @param requestedModel the model id from the Responses API request body
  * @param resolve a getModelInfo-style resolver
  * @param isCombo optional predicate — when the bare id is a combo name, skip the codex
  *        rewrite so downstream combo routing resolves it (#3227/#3233).
  * @returns { model, changed } — model is the (possibly rewritten) id;
- *          changed=true means a codex/ prefix was applied.
+ *          changed=true means a provider/ prefix was applied.
  */
 export async function resolveResponsesApiModel(
   requestedModel: string,
   resolve: ModelResolver,
   isCombo?: (name: string) => Promise<boolean> | boolean
 ): Promise<{ model: string; changed: boolean }> {
-  if (!requestedModel || requestedModel.includes("/")) {
+  if (!requestedModel) {
     return { model: requestedModel, changed: false };
   }
 
-  // #3509: "auto" is OmniRoute's zero-config auto-routing keyword (handled by the
-  // isAutoRouting path in chat.ts, not a DB combo). It must NEVER be rewritten to
-  // "codex/auto" — ChatGPT rejects it with "The 'auto' model is not supported when using
-  // Codex with a ChatGPT account". ("auto/<strategy>" already returns via the slash guard above.)
+  const isCodexPrefixed = /^(cx|codex)\//i.test(requestedModel);
+  const isPostmanPrefixed = /^(postman|postman-agent)\//i.test(requestedModel);
+
+  if (isPostmanPrefixed) {
+    return { model: requestedModel, changed: false };
+  }
+
+  if (requestedModel.includes("/") && !isCodexPrefixed) {
+    return { model: requestedModel, changed: false };
+  }
+
+  // #3509: "auto" is OmniRoute's zero-config auto-routing keyword
   if (requestedModel === "auto") {
+    const codexActive = await isProviderActive("codex");
+    const postmanActive = await isProviderActive("postman");
+    if (!codexActive && postmanActive) {
+      return { model: "postman/auto", changed: true };
+    }
     return { model: requestedModel, changed: false };
   }
 
-  // #3227/#3233: a bare combo name (e.g. "n8n-text", "paid-premium") must NOT be
-  // force-prefixed to codex/ — Codex accepts arbitrary model strings, so the rewrite
-  // would shadow the combo and route to codex. Let downstream combo routing handle it.
+  // #3227/#3233: a bare combo name must NOT be force-prefixed
   if (isCombo) {
     try {
       if (await isCombo(requestedModel)) return { model: requestedModel, changed: false };
     } catch {
-      // combo lookup unavailable — fall through to normal codex-preference resolution
+      // combo lookup unavailable — fall through to normal resolution
     }
   }
 
   try {
-    const resolved = await resolveCodexWsModelInfo(requestedModel, resolve);
+    const rawModel = isCodexPrefixed
+      ? requestedModel.replace(/^(cx|codex)\//i, "")
+      : requestedModel;
+    const codexActive = await isProviderActive("codex");
+    const postmanActive = await isProviderActive("postman");
+
+    // If codex is NOT active but postman IS active, auto-route to postman
+    if (!codexActive && postmanActive) {
+      return { model: `postman/${rawModel}`, changed: true };
+    }
+
+    const resolved = await resolveCodexWsModelInfo(rawModel, resolve);
     if (resolved?.provider !== "codex") {
       return { model: requestedModel, changed: false };
     }
 
-    const prefixed = `codex/${resolved.model || requestedModel}`;
+    const prefixed = `codex/${resolved.model || rawModel}`;
     return { model: prefixed, changed: true };
   } catch {
     return { model: requestedModel, changed: false };

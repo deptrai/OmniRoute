@@ -539,6 +539,23 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
     };
   }
 
+  // Postman Agent fallback for unprefixed GPT-5 / Claude / thinking models
+  if (
+    (activeProviders?.has("postman-agent") || activeProviders?.has("postman")) &&
+    !activeProviders.has("openai") &&
+    !activeProviders.has("codex") &&
+    (/^gpt-5/i.test(modelId) ||
+      /^claude-/i.test(modelId) ||
+      modelId === "auto" ||
+      modelId === "thinking")
+  ) {
+    return {
+      provider: "postman-agent",
+      model: modelId,
+      extendedContext,
+    };
+  }
+
   // Preserve historical behavior: OpenAI stays default when model exists there.
   // Connection availability must not make unprefixed OpenAI models resolve to a
   // different provider; callers can still force Codex with an explicit prefix.
@@ -646,9 +663,22 @@ export async function getModelInfoCore(
 
   if (!parsed.isAlias) {
     const normalizedModel = normalizeCrossProxyModelId(parsed.model).modelId;
-    const canonicalModel = resolveProviderModelAlias(parsed.provider, normalizedModel);
+    let effectiveProvider = parsed.provider;
+
+    if (effectiveProvider === "codex") {
+      const activeProviders = await getActiveProviderSet();
+      if (
+        activeProviders &&
+        !activeProviders.has("codex") &&
+        (activeProviders.has("postman-agent") || activeProviders.has("postman"))
+      ) {
+        effectiveProvider = "postman-agent";
+      }
+    }
+
+    const canonicalModel = resolveProviderModelAlias(effectiveProvider, normalizedModel);
     return {
-      provider: parsed.provider,
+      provider: effectiveProvider,
       model: canonicalModel,
       extendedContext,
     };

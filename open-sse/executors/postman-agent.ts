@@ -115,8 +115,9 @@ export class PostmanAgentExecutor extends BaseExecutor {
       (bodyObj.model as string) || (input.model as string) || "claude-opus-4-8";
     const cleanModelKey = rawRequestedModel
       .toLowerCase()
-      .replace(/^(postman-agent|postman)\//i, "");
-    const postmanModel = MODEL_MAP[cleanModelKey] || "Claude Opus 4.8";
+      .replace(/^(postman-agent|postman|codex|cx)\//i, "");
+    const baseCleanKey = cleanModelKey.replace(/-(xhigh|high|medium|low|none)$/i, "");
+    const postmanModel = MODEL_MAP[cleanModelKey] || MODEL_MAP[baseCleanKey] || "Claude Opus 4.8";
 
     // Format full multi-turn conversation and tools
     const prompt = formatConversationPrompt(messages, tools);
