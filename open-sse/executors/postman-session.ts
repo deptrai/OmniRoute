@@ -307,8 +307,8 @@ export async function askPostmanAgent(
     // Select target model
     await selectTargetModel(page, modelName);
 
-    // Record initial count of agent messages
-    const prevAgentCount = await page.$$eval(".ai-chat-agent-message", (els) => els.length);
+    // Record initial count of message groups
+    const prevGroupCount = await page.$$eval(".ai-chat-message-group", (els) => els.length);
 
     // Focus & insert text safely
     await editor.focus();
@@ -331,7 +331,7 @@ export async function askPostmanAgent(
       await page.keyboard.press("Enter");
     }
 
-    // Wait for response text in .ai-chat-agent-message to generate and finish
+    // Wait for response text in .ai-chat-message-group to generate and finish
     let responseText = "";
     const start = Date.now();
     let lastText = "";
@@ -344,18 +344,23 @@ export async function askPostmanAgent(
 
       await page.waitForTimeout(800);
       const state = await page.evaluate((prev) => {
-        const msgs = Array.from(document.querySelectorAll(".ai-chat-agent-message"));
-        if (msgs.length <= prev) return { hasNew: false, text: "", isGenerating: true };
-        const last = msgs[msgs.length - 1] as HTMLElement;
-        return {
-          hasNew: true,
-          text: last.innerText?.trim() || "",
-          isGenerating: document.body.innerText.includes("Generating..."),
-        };
-      }, prevAgentCount);
+        const groups = Array.from(document.querySelectorAll(".ai-chat-message-group"));
+        if (groups.length <= prev) return { hasNewGroup: false, text: "", isDone: false };
 
-      if (state && state.hasNew && state.text.length > 0) {
-        if (!state.isGenerating) {
+        const lastGroup = groups[groups.length - 1] as HTMLElement;
+        const agentMsg = lastGroup.querySelector(".ai-chat-agent-message") as HTMLElement | null;
+        const text = agentMsg?.innerText?.trim() || "";
+        const isGenerating = document.body.innerText.includes("Generating...");
+
+        return {
+          hasNewGroup: true,
+          text,
+          isDone: !isGenerating && text.length > 0,
+        };
+      }, prevGroupCount);
+
+      if (state && state.hasNewGroup && state.text.length > 0) {
+        if (state.isDone) {
           if (state.text === lastText) {
             stableTicks++;
             if (stableTicks >= 2) {
