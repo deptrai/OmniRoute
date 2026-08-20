@@ -7,6 +7,9 @@ interface ParsedCookie {
   path?: string;
 }
 
+const DEFAULT_WORKSPACE_URL =
+  "https://epsiloncryptoai-7880991.postman.co/workspace/280d1867-5a3e-41c7-8465-9e4b0edf866f?sideView=agentMode";
+
 function parseCookies(raw: string): ParsedCookie[] {
   let cleaned = raw.trim().replace(/^cookie:\s*/i, "");
 
@@ -103,17 +106,58 @@ process.once("beforeExit", () => handleExit());
 process.once("SIGINT", () => handleExit("SIGINT"));
 process.once("SIGTERM", () => handleExit("SIGTERM"));
 
+async function ensureAgentEditorVisible(page: Page, timeoutMs = 25000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (page.isClosed()) throw new Error("Page was closed during navigation.");
+    if (page.url().includes("/login")) {
+      throw new Error(
+        "Postman session expired or redirected to login. Please refresh your postman.sid cookie."
+      );
+    }
+
+    const editor = await page.$(
+      '[contenteditable="true"], .ai-chat-input-container [contenteditable]'
+    );
+    if (editor) return;
+
+    // Try clicking sidebar Agent / Postbot button to expand sideView
+    try {
+      await page.evaluate(() => {
+        const buttons = Array.from(
+          document.querySelectorAll("button, [role='button'], [data-testid*='agent']")
+        );
+        const agentBtn = buttons.find(
+          (b) =>
+            b.getAttribute("aria-label")?.toLowerCase().includes("agent") ||
+            b.getAttribute("aria-label")?.toLowerCase().includes("postbot") ||
+            b.getAttribute("data-testid")?.toLowerCase().includes("agent") ||
+            b.textContent?.toLowerCase().includes("agent") ||
+            b.textContent?.toLowerCase().includes("postbot")
+        );
+        if (agentBtn) (agentBtn as HTMLElement).click();
+      });
+    } catch {
+      // ignore
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  throw new Error(`Timeout ${timeoutMs}ms exceeded waiting for Postman Agent chat editor.`);
+}
+
 export async function getOrInitPostmanPage(
   cookieStr: string,
   workspaceUrl?: string
 ): Promise<Page> {
-  const targetUrl = workspaceUrl || "https://go.postman.co/home?sideView=agentMode";
+  const targetUrl = workspaceUrl || DEFAULT_WORKSPACE_URL;
 
   if (pageInstance && !pageInstance.isClosed() && currentCookie === cookieStr) {
     if (currentWorkspaceUrl !== targetUrl) {
       currentWorkspaceUrl = targetUrl;
-      await pageInstance.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
-      await pageInstance.waitForSelector('[contenteditable="true"]', { timeout: 15000 });
+      await pageInstance.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await ensureAgentEditorVisible(pageInstance, 20000);
     }
     return pageInstance;
   }
@@ -184,19 +228,10 @@ export async function getOrInitPostmanPage(
     pageInstance = await contextInstance.newPage();
     await pageInstance.goto(targetUrl, {
       waitUntil: "domcontentloaded",
-      timeout: 25000,
+      timeout: 35000,
     });
 
-    try {
-      await pageInstance.waitForSelector('[contenteditable="true"]', { timeout: 20000 });
-    } catch (selectorErr) {
-      if (pageInstance.url().includes("/login")) {
-        throw new Error(
-          "Postman session expired or redirected to login. Please refresh your postman.sid cookie."
-        );
-      }
-      throw selectorErr;
-    }
+    await ensureAgentEditorVisible(pageInstance, 30000);
 
     return pageInstance;
   } catch (err) {
@@ -227,7 +262,7 @@ async function selectTargetModel(page: Page, targetModelName: string): Promise<v
         !currentModelBtn.textContent?.toLowerCase().includes(modelName.toLowerCase())
       ) {
         currentModelBtn.click();
-        await new Promise((r) => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 400));
         const targetItem = Array.from(document.querySelectorAll("button, [role='menuitem']")).find(
           (b) => b.textContent?.toLowerCase().includes(modelName.toLowerCase())
         );
@@ -283,7 +318,7 @@ export async function askPostmanAgent(
       document.execCommand("insertText", false, text);
     }, prompt);
 
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(300);
 
     // Click explicit send button .ai-chat-input-send-button
     await page.evaluate(() => {
@@ -297,13 +332,13 @@ export async function askPostmanAgent(
       }
     });
 
-    // Wait for new agent message element to stream and stabilize (up to 45s timeout)
+    // Wait for new agent message element to stream and stabilize (up to 60s timeout)
     let responseText = "";
     const start = Date.now();
     let lastText = "";
     let stableTicks = 0;
 
-    while (Date.now() - start < 45000) {
+    while (Date.now() - start < 60000) {
       if (signal?.aborted) {
         throw new Error("Request aborted by client during generation.");
       }

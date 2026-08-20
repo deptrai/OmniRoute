@@ -1,27 +1,12 @@
-/**
- * PostmanAgentExecutor — Postman Agent Mode (Claude Opus 4.8 / Sonnet 4.6 / GPT-5.5 / GPT-5.6)
- *
- * Routes requests directly through persistent Postman Agent session.
- *
- * Auth: Cookie-based (postman.sid) or session cookies.
- * Models supported: claude-opus-4-8, claude-sonnet-4-6, gpt-5.5, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, thinking, auto
- */
-
-import { BaseExecutor, type ExecuteInput } from "./base.ts";
-import { makeExecutorErrorResult as makeErrorResult, normalizeCookie } from "../utils/error.ts";
+import { BaseExecutor, type ExecuteInput, type ExecutorResult } from "./base.ts";
+import { normalizeCookie } from "../utils/error.ts";
 import { askPostmanAgent } from "./postman-session.ts";
 
-const DEFAULT_POSTMAN_BASE = "https://identity.getpostman.com";
+const DEFAULT_POSTMAN_BASE = "https://go.postman.co";
 
 const MODEL_MAP: Record<string, string> = {
   "claude-opus-4-8": "Claude Opus 4.8",
-  "claude-opus-4.8": "Claude Opus 4.8",
-  "claude-opus-4-7": "Claude Opus 4.7",
-  "claude-opus-4-5": "Claude Opus 4.5",
   "claude-sonnet-4-6": "Claude Sonnet 4.6",
-  "claude-sonnet-4.6": "Claude Sonnet 4.6",
-  "claude-sonnet-4-5": "Claude Sonnet 4.5",
-  "claude-haiku-4-5": "Claude Haiku 4.5",
   "gpt-5.5": "GPT-5.5",
   "gpt-5.6-sol": "GPT-5.6 Sol",
   "gpt-5.6-terra": "GPT-5.6 Terra",
@@ -36,7 +21,31 @@ interface MessageItem {
   content: string | Array<{ type: string; text?: string }>;
 }
 
-function extractText(content: string | Array<{ type: string; text?: string }>): string {
+function makeErrorResult(
+  status: number,
+  message: string,
+  body: unknown,
+  url: string = DEFAULT_POSTMAN_BASE
+): ExecutorResult {
+  return {
+    url,
+    headers: {},
+    transformedBody: body,
+    response: new Response(
+      JSON.stringify({
+        error: {
+          message,
+        },
+      }),
+      {
+        status,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }
+    ),
+  };
+}
+
+function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content.map((c) => (c.type === "text" ? c.text || "" : "")).join("");
@@ -70,13 +79,14 @@ function formatConversationPrompt(messages: MessageItem[], tools?: unknown[]): s
   return parts.join("\n\n");
 }
 
-function splitTextIntoSafeChunks(text: string, chunkSize = 16): string[] {
-  const chars = Array.from(text);
+function splitTextIntoSafeChunks(text: string, chunkSize: number = 32): string[] {
+  // Use Array.from to iterate over unicode code points safely (prevents splitting surrogate pairs)
+  const codePoints = Array.from(text);
   const chunks: string[] = [];
-  for (let i = 0; i < chars.length; i += chunkSize) {
-    chunks.push(chars.slice(i, i + chunkSize).join(""));
+  for (let i = 0; i < codePoints.length; i += chunkSize) {
+    chunks.push(codePoints.slice(i, i + chunkSize).join(""));
   }
-  return chunks.length > 0 ? chunks : [text];
+  return chunks;
 }
 
 export class PostmanAgentExecutor extends BaseExecutor {
@@ -136,10 +146,13 @@ export class PostmanAgentExecutor extends BaseExecutor {
             .trim()
             .replace(/[^a-zA-Z0-9_-]/g, "")
         : "";
-      const customUrl =
-        rawDomain && rawWorkspace
-          ? `https://${rawDomain}.postman.co/workspace/${rawWorkspace}?sideView=agentMode`
-          : undefined;
+
+      let customUrl: string | undefined = undefined;
+      if (psData?.workspaceUrl || psData?.workspace_url || psData?.url) {
+        customUrl = String(psData.workspaceUrl || psData.workspace_url || psData.url).trim();
+      } else if (rawDomain && rawWorkspace) {
+        customUrl = `https://${rawDomain}.postman.co/workspace/${rawWorkspace}?sideView=agentMode`;
+      }
 
       responseText = await askPostmanAgent(prompt, cookie, postmanModel, customUrl, input.signal);
     } catch (err: any) {
@@ -186,22 +199,26 @@ export class PostmanAgentExecutor extends BaseExecutor {
             usage: {
               prompt_tokens: Math.ceil(prompt.length / 4),
               completion_tokens: Math.ceil(responseText.length / 4),
-              total_tokens: Math.ceil(prompt.length / 4) + Math.ceil(responseText.length / 4),
+              total_tokens: Math.ceil((prompt.length + responseText.length) / 4),
             },
           }),
-          { headers: { "Content-Type": "application/json" } }
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }
         ),
-        url: DEFAULT_POSTMAN_BASE,
-        headers: {},
-        transformedBody: { model: postmanModel, prompt },
+        transformedBody: body,
       };
     }
 
-    // Safe streaming pipeline preserving all whitespace, newlines, emojis, and indentation
-    const chunks = splitTextIntoSafeChunks(responseText, 16);
+    // Stream SSE Response
+    const chunks = splitTextIntoSafeChunks(responseText, 32);
     const stream = new ReadableStream({
-      async start(controller) {
-        const initialChunk = {
+      start(controller) {
+        // First chunk with role
+        const roleChunk = {
           id: completionId,
           object: "chat.completion.chunk",
           created: createdTime,
@@ -214,8 +231,9 @@ export class PostmanAgentExecutor extends BaseExecutor {
             },
           ],
         };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(initialChunk)}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(roleChunk)}\n\n`));
 
+        // Content chunks
         for (const chunkText of chunks) {
           const chunk = {
             id: completionId,
@@ -233,7 +251,8 @@ export class PostmanAgentExecutor extends BaseExecutor {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
         }
 
-        const doneChunk = {
+        // Final chunk
+        const finalChunk = {
           id: completionId,
           object: "chat.completion.chunk",
           created: createdTime,
@@ -246,7 +265,7 @@ export class PostmanAgentExecutor extends BaseExecutor {
             },
           ],
         };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(finalChunk)}\n\n`));
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       },
@@ -254,15 +273,14 @@ export class PostmanAgentExecutor extends BaseExecutor {
 
     return {
       response: new Response(stream, {
+        status: 200,
         headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
         },
       }),
-      url: DEFAULT_POSTMAN_BASE,
-      headers: {},
-      transformedBody: { model: postmanModel, prompt },
+      transformedBody: body,
     };
   }
 }
