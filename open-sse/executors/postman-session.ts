@@ -61,12 +61,20 @@ export async function cleanupBrowser(): Promise<void> {
   currentWorkspaceUrl = "";
 }
 
-const handleExit = async () => {
-  await cleanupBrowser();
+const handleExit = async (signal?: string) => {
+  try {
+    await Promise.race([cleanupBrowser(), new Promise((r) => setTimeout(r, 2000))]);
+  } catch {
+    // ignore
+  } finally {
+    if (signal) {
+      process.exit(0);
+    }
+  }
 };
-process.once("beforeExit", handleExit);
-process.once("SIGINT", handleExit);
-process.once("SIGTERM", handleExit);
+process.once("beforeExit", () => handleExit());
+process.once("SIGINT", () => handleExit("SIGINT"));
+process.once("SIGTERM", () => handleExit("SIGTERM"));
 
 export async function getOrInitPostmanPage(
   cookieStr: string,
