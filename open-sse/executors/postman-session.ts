@@ -289,7 +289,8 @@ export async function askPostmanAgent(
   cookieStr: string,
   modelName: string = "Claude Opus 4.8",
   workspaceUrl?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onChunk?: (delta: string) => void
 ): Promise<string> {
   let release: () => void = () => {};
   const currentLock = new Promise<void>((res) => {
@@ -329,7 +330,7 @@ export async function askPostmanAgent(
       document.execCommand("insertText", false, text);
     }, prompt);
 
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(200);
 
     // Click explicit send button
     const sendBtn = await page.$(".ai-chat-input-send-button");
@@ -339,8 +340,9 @@ export async function askPostmanAgent(
       await page.keyboard.press("Enter");
     }
 
-    // Wait for response text in .ai-chat-message-group to generate and finish
+    // Wait for response text in .ai-chat-message-group to stream and finish
     let responseText = "";
+    let emittedLength = 0;
     const start = Date.now();
     let lastText = "";
     let stableTicks = 0;
@@ -350,7 +352,7 @@ export async function askPostmanAgent(
         throw new Error("Request aborted by client during generation.");
       }
 
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(150);
       const state = await page.evaluate((prev) => {
         const groups = Array.from(document.querySelectorAll(".ai-chat-message-group"));
         if (groups.length <= prev) return { hasNewGroup: false, text: "", isDone: false };
@@ -367,11 +369,19 @@ export async function askPostmanAgent(
         };
       }, prevGroupCount);
 
-      if (state && state.hasNewGroup && state.text.length > 0) {
+      if (state && state.hasNewGroup) {
+        if (state.text.length > emittedLength) {
+          const delta = state.text.slice(emittedLength);
+          if (onChunk) {
+            onChunk(delta);
+          }
+          emittedLength = state.text.length;
+        }
+
         if (state.isDone) {
           if (state.text === lastText) {
             stableTicks++;
-            if (stableTicks >= 2) {
+            if (stableTicks >= 3) {
               responseText = state.text;
               break;
             }

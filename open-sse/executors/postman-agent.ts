@@ -139,30 +139,131 @@ export class PostmanAgentExecutor extends BaseExecutor {
       );
     }
 
-    // Call real Postman Agent
+    const encoder = new TextEncoder();
+    const modelName = rawRequestedModel;
+    const completionId = `chatcmpl-postman-${Date.now()}`;
+    const createdTime = Math.floor(Date.now() / 1000);
+
+    const psData = credentials?.providerSpecificData as Record<string, unknown> | undefined;
+    const rawDomain = psData?.teamDomain
+      ? String(psData.teamDomain)
+          .trim()
+          .replace(/^https?:\/\//i, "")
+          .replace(/\.postman\.(co|com)\/?.*$/i, "")
+          .replace(/[^a-zA-Z0-9_-]/g, "")
+      : "";
+    const rawWorkspace = psData?.workspaceId
+      ? String(psData.workspaceId)
+          .trim()
+          .replace(/[^a-zA-Z0-9_-]/g, "")
+      : "";
+
+    let customUrl: string | undefined = undefined;
+    if (psData?.workspaceUrl || psData?.workspace_url || psData?.url) {
+      customUrl = String(psData.workspaceUrl || psData.workspace_url || psData.url).trim();
+    } else if (rawDomain && rawWorkspace) {
+      customUrl = `https://${rawDomain}.postman.co/workspace/${rawWorkspace}?sideView=agentMode`;
+    }
+
+    if (wantStream) {
+      let isCancelled = false;
+      const stream = new ReadableStream({
+        start(controller) {
+          // Send initial role chunk
+          const roleChunk = {
+            id: completionId,
+            object: "chat.completion.chunk",
+            created: createdTime,
+            model: modelName,
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: "" },
+                finish_reason: null,
+              },
+            ],
+          };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(roleChunk)}\n\n`));
+
+          // Run background generation with live onChunk streaming
+          askPostmanAgent(prompt, cookie, postmanModel, customUrl, input.signal, (delta) => {
+            if (isCancelled) return;
+            const chunk = {
+              id: completionId,
+              object: "chat.completion.chunk",
+              created: createdTime,
+              model: modelName,
+              choices: [
+                {
+                  index: 0,
+                  delta: { content: delta },
+                  finish_reason: null,
+                },
+              ],
+            };
+            try {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            } catch {}
+          })
+            .then((finalText) => {
+              if (isCancelled) return;
+              if (!finalText) {
+                try {
+                  controller.error(
+                    new Error(
+                      `Postman Agent did not produce a response within the timeout limit for model ${postmanModel}.`
+                    )
+                  );
+                } catch {}
+                return;
+              }
+              const finalChunk = {
+                id: completionId,
+                object: "chat.completion.chunk",
+                created: createdTime,
+                model: modelName,
+                choices: [
+                  {
+                    index: 0,
+                    delta: {},
+                    finish_reason: "stop",
+                  },
+                ],
+              };
+              try {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(finalChunk)}\n\n`));
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                controller.close();
+              } catch {}
+            })
+            .catch((err) => {
+              if (isCancelled) return;
+              try {
+                controller.error(err);
+              } catch {}
+            });
+        },
+        cancel() {
+          isCancelled = true;
+        },
+      });
+
+      return {
+        response: new Response(stream, {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+          },
+        }),
+        transformedBody: body,
+      };
+    }
+
+    // Non-streaming JSON completion path
     let responseText = "";
     try {
-      const psData = credentials?.providerSpecificData as Record<string, unknown> | undefined;
-      const rawDomain = psData?.teamDomain
-        ? String(psData.teamDomain)
-            .trim()
-            .replace(/^https?:\/\//i, "")
-            .replace(/\.postman\.(co|com)\/?.*$/i, "")
-            .replace(/[^a-zA-Z0-9_-]/g, "")
-        : "";
-      const rawWorkspace = psData?.workspaceId
-        ? String(psData.workspaceId)
-            .trim()
-            .replace(/[^a-zA-Z0-9_-]/g, "")
-        : "";
-
-      let customUrl: string | undefined = undefined;
-      if (psData?.workspaceUrl || psData?.workspace_url || psData?.url) {
-        customUrl = String(psData.workspaceUrl || psData.workspace_url || psData.url).trim();
-      } else if (rawDomain && rawWorkspace) {
-        customUrl = `https://${rawDomain}.postman.co/workspace/${rawWorkspace}?sideView=agentMode`;
-      }
-
       responseText = await askPostmanAgent(prompt, cookie, postmanModel, customUrl, input.signal);
     } catch (err: any) {
       return makeErrorResult(
@@ -182,113 +283,36 @@ export class PostmanAgentExecutor extends BaseExecutor {
       );
     }
 
-    const encoder = new TextEncoder();
-    const modelName = rawRequestedModel;
-    const completionId = `chatcmpl-postman-${Date.now()}`;
-    const createdTime = Math.floor(Date.now() / 1000);
-
-    if (!wantStream) {
-      return {
-        response: new Response(
-          JSON.stringify({
-            id: completionId,
-            object: "chat.completion",
-            created: createdTime,
-            model: modelName,
-            choices: [
-              {
-                index: 0,
-                message: {
-                  role: "assistant",
-                  content: responseText,
-                },
-                finish_reason: "stop",
-              },
-            ],
-            usage: {
-              prompt_tokens: Math.ceil(prompt.length / 4),
-              completion_tokens: Math.ceil(responseText.length / 4),
-              total_tokens: Math.ceil((prompt.length + responseText.length) / 4),
-            },
-          }),
-          {
-            status: 200,
-            headers: {
-              "content-type": "application/json",
-            },
-          }
-        ),
-        transformedBody: body,
-      };
-    }
-
-    // Stream SSE Response
-    const chunks = splitTextIntoSafeChunks(responseText, 32);
-    const stream = new ReadableStream({
-      start(controller) {
-        // First chunk with role
-        const roleChunk = {
+    return {
+      response: new Response(
+        JSON.stringify({
           id: completionId,
-          object: "chat.completion.chunk",
+          object: "chat.completion",
           created: createdTime,
           model: modelName,
           choices: [
             {
               index: 0,
-              delta: { role: "assistant", content: "" },
-              finish_reason: null,
-            },
-          ],
-        };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(roleChunk)}\n\n`));
-
-        // Content chunks
-        for (const chunkText of chunks) {
-          const chunk = {
-            id: completionId,
-            object: "chat.completion.chunk",
-            created: createdTime,
-            model: modelName,
-            choices: [
-              {
-                index: 0,
-                delta: { content: chunkText },
-                finish_reason: null,
+              message: {
+                role: "assistant",
+                content: responseText,
               },
-            ],
-          };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-        }
-
-        // Final chunk
-        const finalChunk = {
-          id: completionId,
-          object: "chat.completion.chunk",
-          created: createdTime,
-          model: modelName,
-          choices: [
-            {
-              index: 0,
-              delta: {},
               finish_reason: "stop",
             },
           ],
-        };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(finalChunk)}\n\n`));
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
-    return {
-      response: new Response(stream, {
-        status: 200,
-        headers: {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        },
-      }),
+          usage: {
+            prompt_tokens: Math.ceil(prompt.length / 4),
+            completion_tokens: Math.ceil(responseText.length / 4),
+            total_tokens: Math.ceil((prompt.length + responseText.length) / 4),
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      ),
       transformedBody: body,
     };
   }
