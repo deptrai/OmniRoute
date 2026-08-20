@@ -243,7 +243,8 @@ export const WEB_COOKIE_PROVIDERS = {
     color: "#2563EB",
     textIcon: "KW",
     website: "https://www.kimi.com",
-    authHint: "Paste your Cookie header from www.kimi.com (must contain kimi-auth=...). Find it via DevTools → Network → request → Cookie.",
+    authHint:
+      "Paste your Cookie header from www.kimi.com (must contain kimi-auth=...). Find it via DevTools → Network → request → Cookie.",
     subscriptionRisk: true,
     riskNoticeVariant: "webCookie",
   },
@@ -301,5 +302,21 @@ export const WEB_COOKIE_PROVIDERS = {
       "Free tier (5 Flows/5h, 38.64 Flows/week) — DeepSeek V3.2, GLM 4.7 Flash Free, MiMo V2 Flash Free and more. No subscription required.",
     authHint:
       "Login at zenmux.ai, then export all cookies using EditThisCookie or Cookie-Editor and paste the full Cookie header string here. Refresh every ~30 days.",
+  },
+  "postman-agent": {
+    id: "postman-agent",
+    alias: "postman",
+    name: "Postman Agent (Claude Opus 4.8 / Enterprise)",
+    icon: "psychology",
+    color: "#FF6C37",
+    textIcon: "PM",
+    website: "https://www.postman.com",
+    hasFree: true,
+    freeNote:
+      "Postman Enterprise Trial 30 days — Claude Opus 4.8, Claude Sonnet 4.6, GPT-5.5, GPT-5.6. ~800 AI credits/month.",
+    subscriptionRisk: true,
+    riskNoticeVariant: "webCookie",
+    authHint:
+      "Login to Postman Web, copy the `postman.sid` cookie value from DevTools → Application → Cookies (or export full cookies) and paste here.",
   },
 };

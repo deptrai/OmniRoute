@@ -98,6 +98,7 @@ import { blackbox_webProvider } from "./registry/blackbox/web/index.ts";
 import { uncloseaiProvider } from "./registry/uncloseai/index.ts";
 import { nscaleProvider } from "./registry/nscale/index.ts";
 import { chatgpt_webProvider } from "./registry/chatgpt-web/index.ts";
+import { postman_agentProvider } from "./registry/postman/agent/index.ts";
 import { openrouterProvider } from "./registry/openrouter/index.ts";
 import { orcarouterProvider } from "./registry/orcarouter/index.ts";
 import { glhfProvider } from "./registry/glhf/index.ts";
@@ -344,4 +345,6 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   "codebuddy-cn": codebuddy_cnProvider,
   pioneer: pioneerProvider,
   "zenmux-free": zenmux_freeProvider,
+  "postman-agent": postman_agentProvider,
+  postman: postman_agentProvider,
 };

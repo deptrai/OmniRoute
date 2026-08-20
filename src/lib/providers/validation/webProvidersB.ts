@@ -322,7 +322,9 @@ function extractM365CredentialParts(raw: string, providerSpecificData: Record<st
       (typeof providerSpecificData.access_token === "string"
         ? providerSpecificData.access_token
         : "") ||
-      (typeof providerSpecificData.accessToken === "string" ? providerSpecificData.accessToken : ""),
+      (typeof providerSpecificData.accessToken === "string"
+        ? providerSpecificData.accessToken
+        : ""),
     chathubPath:
       parts.chathubPath ||
       parts.userTenant ||
@@ -334,10 +336,7 @@ function extractM365CredentialParts(raw: string, providerSpecificData: Record<st
 }
 
 // ── Microsoft 365 Copilot Web token validator ──
-export async function validateCopilotM365WebProvider({
-  apiKey,
-  providerSpecificData = {},
-}: any) {
+export async function validateCopilotM365WebProvider({ apiKey, providerSpecificData = {} }: any) {
   const { accessToken, chathubPath } = extractM365CredentialParts(
     String(apiKey || ""),
     providerSpecificData
@@ -527,6 +526,51 @@ export async function validateInnerAiProvider({ apiKey, providerSpecificData = {
         error:
           "Token does not look like an Inner.ai session token — re-paste from DevTools → Cookies → .innerai.com",
       };
+    }
+
+    return { valid: true, error: null };
+  } catch (error: any) {
+    return toValidationErrorResult(error);
+  }
+}
+
+export async function validatePostmanAgentProvider({ apiKey, providerSpecificData = {} }: any) {
+  try {
+    const raw = String(apiKey || "").trim();
+    if (!raw) {
+      return {
+        valid: false,
+        error: "Postman session cookie (postman.sid) or token is required.",
+      };
+    }
+
+    if (raw.length < 10) {
+      return {
+        valid: false,
+        error: "Invalid Postman session — please paste the full `postman.sid` cookie value.",
+      };
+    }
+
+    // Lightweight verification probe to Postman Identity
+    const cookieHeader = raw.includes("=") ? raw : `postman.sid=${raw}`;
+    try {
+      const probeRes = await fetch("https://identity.getpostman.com/", {
+        method: "HEAD",
+        headers: {
+          Cookie: cookieHeader,
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        },
+        redirect: "manual",
+      });
+
+      if (probeRes.status >= 500) {
+        return {
+          valid: false,
+          error: `Postman Identity service unavailable (HTTP ${probeRes.status}).`,
+        };
+      }
+    } catch {
+      // Network probe failed to reach Postman identity, fallback to format validity
     }
 
     return { valid: true, error: null };

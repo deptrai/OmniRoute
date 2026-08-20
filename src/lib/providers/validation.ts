@@ -45,6 +45,7 @@ import {
   validateT3WebProvider,
   validateJulesProvider,
   validateInnerAiProvider,
+  validatePostmanAgentProvider,
 } from "./validation/webProvidersB";
 import {
   validateHerokuProvider,
@@ -363,6 +364,8 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     "copilot-m365-web": validateCopilotM365WebProvider,
     "copilot-web": validateCopilotWebProvider,
     "t3-web": validateT3WebProvider,
+    "postman-agent": validatePostmanAgentProvider,
+    postman: validatePostmanAgentProvider,
     "azure-openai": validateAzureOpenAIProvider,
     "azure-ai": validateAzureAiProvider,
     "voyage-ai": ({ apiKey, providerSpecificData }: any) => {
