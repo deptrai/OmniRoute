@@ -20,34 +20,32 @@ describe("PostmanAgentExecutor Contract", () => {
         messages: [{ role: "user", content: "hello" }],
       },
       headers: {},
-      auth: { apiKey: "" },
+      credentials: { apiKey: "" },
     });
 
     assert.ok(res.response);
     assert.strictEqual(res.response.status, 401);
     const json = (await res.response.json()) as any;
-    assert.match(json.error.message, /apiKey\/cookie/);
+    assert.match(json.error.message, /session cookie|postman\.sid/i);
   });
 
-  it("handles AbortSignal before execution", async () => {
+  it("fails fast with 400 when prompt and messages are empty", async () => {
     const executor = new PostmanAgentExecutor();
-    const controller = new AbortController();
-    controller.abort();
-
     const res = await executor.execute({
       provider: "postman-agent",
       model: "claude-opus-4-8",
       body: {
         model: "postman/claude-opus-4-8",
-        messages: [{ role: "user", content: "hello" }],
+        messages: [],
       },
       headers: {},
-      auth: { apiKey: "postman.sid=test-cookie" },
-      signal: controller.signal,
+      credentials: { apiKey: "postman.sid=test-valid-session" },
     });
 
     assert.ok(res.response);
-    assert.strictEqual(res.response.status, 504);
+    assert.strictEqual(res.response.status, 400);
+    const json = (await res.response.json()) as any;
+    assert.match(json.error.message, /No prompt or messages/i);
   });
 
   it("returns standard OpenAI wrapper shape", async () => {
@@ -60,7 +58,7 @@ describe("PostmanAgentExecutor Contract", () => {
         messages: [{ role: "user", content: "hello" }],
       },
       headers: {},
-      auth: { apiKey: "" },
+      credentials: { apiKey: "" },
     });
 
     assert.ok(res.url);

@@ -70,6 +70,15 @@ function formatConversationPrompt(messages: MessageItem[], tools?: unknown[]): s
   return parts.join("\n\n");
 }
 
+function splitTextIntoSafeChunks(text: string, chunkSize = 16): string[] {
+  const chars = Array.from(text);
+  const chunks: string[] = [];
+  for (let i = 0; i < chars.length; i += chunkSize) {
+    chunks.push(chars.slice(i, i + chunkSize).join(""));
+  }
+  return chunks.length > 0 ? chunks : [text];
+}
+
 export class PostmanAgentExecutor extends BaseExecutor {
   constructor() {
     super("postman-agent", { id: "postman-agent", baseUrl: DEFAULT_POSTMAN_BASE });
@@ -92,8 +101,12 @@ export class PostmanAgentExecutor extends BaseExecutor {
 
     const messages = (bodyObj.messages as MessageItem[]) || [];
     const tools = (bodyObj.tools as unknown[]) || undefined;
-    const requestedModel = (bodyObj.model as string) || "claude-opus-4-8";
-    const postmanModel = MODEL_MAP[requestedModel.toLowerCase()] || "Claude Opus 4.8";
+    const rawRequestedModel =
+      (bodyObj.model as string) || (input.model as string) || "claude-opus-4-8";
+    const cleanModelKey = rawRequestedModel
+      .toLowerCase()
+      .replace(/^(postman-agent|postman)\//i, "");
+    const postmanModel = MODEL_MAP[cleanModelKey] || "Claude Opus 4.8";
 
     // Format full multi-turn conversation and tools
     const prompt = formatConversationPrompt(messages, tools);
@@ -114,8 +127,8 @@ export class PostmanAgentExecutor extends BaseExecutor {
       const rawDomain = psData?.teamDomain
         ? String(psData.teamDomain)
             .trim()
-            .replace(/^https?:\/\//, "")
-            .split(".")[0]
+            .replace(/^https?:\/\//i, "")
+            .replace(/\.postman\.(co|com)\/?.*$/i, "")
             .replace(/[^a-zA-Z0-9_-]/g, "")
         : "";
       const rawWorkspace = psData?.workspaceId
@@ -125,7 +138,7 @@ export class PostmanAgentExecutor extends BaseExecutor {
         : "";
       const customUrl =
         rawDomain && rawWorkspace
-          ? `https://${rawDomain}.postman.co/workspace/${rawWorkspace}/configure-mcp-servers?sideView=agentMode`
+          ? `https://${rawDomain}.postman.co/workspace/${rawWorkspace}?sideView=agentMode`
           : undefined;
 
       responseText = await askPostmanAgent(prompt, cookie, postmanModel, customUrl, input.signal);
@@ -148,7 +161,7 @@ export class PostmanAgentExecutor extends BaseExecutor {
     }
 
     const encoder = new TextEncoder();
-    const modelName = requestedModel;
+    const modelName = rawRequestedModel;
     const completionId = `chatcmpl-postman-${Date.now()}`;
     const createdTime = Math.floor(Date.now() / 1000);
 
@@ -184,8 +197,8 @@ export class PostmanAgentExecutor extends BaseExecutor {
       };
     }
 
-    // Safe streaming pipeline preserving all whitespace, newlines, and indentation
-    const chunks = responseText.match(/[\s\S]{1,16}/g) || [responseText];
+    // Safe streaming pipeline preserving all whitespace, newlines, emojis, and indentation
+    const chunks = splitTextIntoSafeChunks(responseText, 16);
     const stream = new ReadableStream({
       async start(controller) {
         const initialChunk = {

@@ -1,32 +1,27 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 
 function parseCookies(raw: string) {
-  let cleaned = raw.trim();
-  if (cleaned.toLowerCase().startsWith("cookie:")) {
-    cleaned = cleaned.slice(7).trim();
-  }
+  let cleaned = raw.trim().replace(/^cookie:\s*/i, "");
   if (!cleaned.includes("=")) {
-    cleaned = `postman.sid=${cleaned}`;
+    return [{ name: "postman.sid", value: cleaned }];
   }
 
-  return cleaned
-    .split(";")
-    .map((pair) => pair.trim())
-    .filter(Boolean)
-    .map((pair) => {
-      const idx = pair.indexOf("=");
-      if (idx === -1) return null;
-      let name = pair.slice(0, idx).trim();
-      let value = pair.slice(idx + 1).trim();
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-      return { name, value };
-    })
-    .filter(Boolean) as Array<{ name: string; value: string }>;
+  const cookieMap = new Map<string, string>();
+  for (const pair of cleaned.split(";")) {
+    const idx = pair.indexOf("=");
+    if (idx === -1) continue;
+    const name = pair.slice(0, idx).trim();
+    let value = pair.slice(idx + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (name) cookieMap.set(name, value);
+  }
+
+  return Array.from(cookieMap.entries()).map(([name, value]) => ({ name, value }));
 }
 
 let browserInstance: Browser | null = null;
@@ -66,17 +61,18 @@ export async function cleanupBrowser(): Promise<void> {
   currentWorkspaceUrl = "";
 }
 
-process.once("beforeExit", () => {
-  void cleanupBrowser();
-});
+const handleExit = async () => {
+  await cleanupBrowser();
+};
+process.once("beforeExit", handleExit);
+process.once("SIGINT", handleExit);
+process.once("SIGTERM", handleExit);
 
 export async function getOrInitPostmanPage(
   cookieStr: string,
   workspaceUrl?: string
 ): Promise<Page> {
-  const targetUrl =
-    workspaceUrl ||
-    "https://epsiloncryptoai-7880991.postman.co/workspace/280d1867-5a3e-41c7-8465-9e4b0edf866f?sideView=agentMode";
+  const targetUrl = workspaceUrl || "https://go.postman.co/home?sideView=agentMode";
 
   if (pageInstance && !pageInstance.isClosed() && currentCookie === cookieStr) {
     if (currentWorkspaceUrl !== targetUrl) {
@@ -108,7 +104,12 @@ export async function getOrInitPostmanPage(
 
     browserInstance = await chromium.launch({
       headless: true,
-      args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+      ],
     });
 
     contextInstance = await browserInstance.newContext({
@@ -118,13 +119,19 @@ export async function getOrInitPostmanPage(
     });
 
     const parsed = parseCookies(cookieStr);
-    const domains = [
-      ".postman.co",
-      ".postman.com",
-      ".getpostman.com",
-      "identity.getpostman.com",
-      ".epsiloncryptoai-7880991.postman.co",
-    ];
+    const domainMatches = targetUrl.match(/https?:\/\/([^/?#]+)/i);
+    const hostDomain = domainMatches ? `.${domainMatches[1]}` : ".postman.co";
+
+    const domains = Array.from(
+      new Set([
+        ".postman.co",
+        ".postman.com",
+        ".getpostman.com",
+        "identity.getpostman.com",
+        hostDomain,
+      ])
+    );
+
     for (const d of domains) {
       await contextInstance.addCookies(
         parsed.map((c) => ({
@@ -209,16 +216,15 @@ export async function askPostmanAgent(
     release = res;
   });
   const prevQueue = requestQueue;
-  requestQueue = requestQueue.then(() => currentLock);
-
-  await prevQueue;
-
-  if (signal?.aborted) {
-    release();
-    throw new Error("Request was aborted by client before execution.");
-  }
+  requestQueue = requestQueue.catch(() => {}).then(() => currentLock);
 
   try {
+    await prevQueue.catch(() => {});
+
+    if (signal?.aborted) {
+      throw new Error("Request was aborted by client before execution.");
+    }
+
     const page = await getOrInitPostmanPage(cookieStr, workspaceUrl);
 
     const editor = await page.$('[contenteditable="true"]');
@@ -275,8 +281,8 @@ export async function askPostmanAgent(
         if (latestMsg && latestMsg.length > 0) {
           if (latestMsg === lastText) {
             stableTicks++;
-            if (stableTicks >= 3) {
-              // Stable for 2.4s
+            if (stableTicks >= 4) {
+              // Stable for 3.2s
               responseText = latestMsg;
               break;
             }

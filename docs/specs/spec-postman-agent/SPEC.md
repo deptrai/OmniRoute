@@ -70,3 +70,13 @@ Without this provider, developers must use manual Postman web UI or pay high dir
 
 - Should OmniRoute v2 implement a multi-page / multi-context pool (e.g. 3-5 concurrent Chromium tabs) to handle high concurrent load?
 - Should OmniRoute auto-fetch available workspace IDs dynamically via Postman internal API (`https://api.getpostman.com/workspaces`) if none are configured?
+
+## Review Findings
+
+- [x] [Review][Patch] Fix Promise Mutex Queue exception handling to prevent permanent deadlock [open-sse/executors/postman-session.ts:211-221]
+- [x] [Review][Patch] Remove hardcoded private teamDomain/workspaceId fallback and support generic workspace URLs [open-sse/executors/postman-agent.ts:50-56]
+- [x] [Review][Patch] Add process SIGINT/SIGTERM lifecycle cleanup hooks for Chromium [open-sse/executors/postman-session.ts:66-71]
+- [x] [Review][Patch] Use Unicode code-point safe chunking to prevent surrogate pair/emoji corruption in SSE streaming [open-sse/executors/postman-agent.ts:117-145]
+- [x] [Review][Patch] Strengthen model prefix stripping regex to handle case-insensitivity [open-sse/executors/postman-agent.ts:42-45]
+- [x] [Review][Patch] Ensure debounce/stabilization polling waits at least 3.2s for deep reasoning models [open-sse/executors/postman-session.ts:276-282]
+- [x] [Review][Patch] Update unit tests to align with credentials contract and exact error messages [tests/unit/executor-postman-agent.test.ts:1-71]
