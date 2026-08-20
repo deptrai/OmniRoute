@@ -54,19 +54,34 @@ function extractText(content: unknown): string {
 }
 
 function formatConversationPrompt(messages: MessageItem[]): string {
+  if (!Array.isArray(messages) || messages.length === 0) return "";
+
+  // If only 1 user message, return its text directly
+  const nonSystem = messages.filter((m) => m.role !== "system");
+  if (nonSystem.length === 1 && nonSystem[0].role === "user") {
+    return extractText(nonSystem[0].content).trim();
+  }
+
   const parts: string[] = [];
 
-  // Format all conversation turns
+  // Format conversation turns
   for (const m of messages) {
     const text = extractText(m.content).trim();
     if (!text) continue;
+
     if (m.role === "system") {
-      parts.push(`[System Instruction]:\n${text}`);
+      // Skip massive client harness system manuals (> 500 chars) that stall web agent UI
+      if (text.length > 500) continue;
+      parts.push(`[System]: ${text}`);
     } else if (m.role === "assistant") {
-      parts.push(`[Assistant]:\n${text}`);
+      parts.push(`[Assistant]: ${text}`);
     } else {
-      parts.push(text);
+      parts.push(`[User]: ${text}`);
     }
+  }
+
+  if (parts.length === 0 && messages.length > 0) {
+    return extractText(messages[messages.length - 1].content).trim();
   }
 
   return parts.join("\n\n");
