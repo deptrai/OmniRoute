@@ -10,7 +10,7 @@ companions:
 
 ## Why
 
-OmniRoute aims to unify all enterprise and consumer AI model access under a standard OpenAI-compatible gateway (`/v1/chat/completions`). Postman Enterprise offers Agent Mode with state-of-the-art models (including `Claude Opus 4.8`, `Claude Sonnet 4.6`, `GPT-5.5`, `GPT-5.6 Sol`, `GPT-5.6 Terra`, `GPT-5.6 Luna`, `Thinking`) through web session cookies (`postman.sid`).
+OmniRoute aims to unify all enterprise and consumer AI model access under a standard OpenAI-compatible gateway (`/v1/chat/completions`). Postman Enterprise offers Agent Mode with state-of-the-art models (including `Claude Opus 4.8`, `Claude Sonnet 4.6`, `GPT-5.5`, `GPT-5.6 Sol`, `GPT-5.6 Terra`, `GPT-5.6 Luna`, `Thinking`, and `Auto`) through web session cookies (`postman.sid`).
 
 Without this provider, developers must use manual Postman web UI or pay high direct API fees. This feature integrates Postman Agent Mode as a first-class web-cookie provider within OmniRoute, automating the headless browser session, multi-turn conversation formatting, dynamic model selection, and OpenAI SSE streaming.
 
@@ -21,11 +21,11 @@ Without this provider, developers must use manual Postman web UI or pay high dir
   - **success:** `GET /v1/models` returns all 9 Postman models with proper prefixing (`postman/claude-opus-4-8`, `postman/gpt-5.6-sol`, etc.); UI shows Postman in the Web Cookie provider grid with `subscriptionRisk` flags.
 
 - **CAP-2**
-  - **intent:** OmniRoute manages a persistent, headless Chromium session via Playwright that injects user session cookies (`postman.sid`) across `.postman.co`, `.postman.com`, and `identity.getpostman.com`.
-  - **success:** The session boots in background, navigates to the Agent Mode workspace URL with `domcontentloaded`, and automatically recovers from disconnections or server restarts via `SIGINT`/`SIGTERM` hooks.
+  - **intent:** OmniRoute manages a persistent, headless Chromium session via Playwright that injects user session cookies (`postman.sid`) across `.postman.co`, `.postman.com`, `identity.getpostman.com`, and the workspace host domain.
+  - **success:** The session boots in background, navigates directly to the Agent Mode workspace URL (`https://<team>.postman.co/workspace/<id>?sideView=agentMode` or default `https://go.postman.co/home?sideView=agentMode`) with `domcontentloaded`, and automatically recovers from disconnections or server restarts via `SIGINT`/`SIGTERM`/`beforeExit` hooks.
 
 - **CAP-3**
-  - **intent:** OmniRoute automatically switches to the requested model in the Postman UI dropdown prior to submitting the prompt.
+  - **intent:** OmniRoute automatically switches to the requested model in the Postman UI dropdown prior to submitting the prompt, stripping model namespace prefixes case-insensitively (`/^(postman-agent|postman)\//i`).
   - **success:** When a request targets `postman/gpt-5.6-sol` or `postman/claude-opus-4-8`, the executor clicks the active model dropdown and selects the exact model before dispatching the user prompt.
 
 - **CAP-4**
@@ -33,15 +33,16 @@ Without this provider, developers must use manual Postman web UI or pay high dir
   - **success:** Rich text editor is cleared and populated via `document.execCommand("insertText")`; multi-turn dialogue retains past user/assistant context; multiline code blocks do not trigger early Enter submit; tool schemas are embedded into prompt context.
 
 - **CAP-5**
-  - **intent:** OmniRoute emits OpenAI-compatible JSON completions for non-streaming calls and SSE `chat.completion.chunk` streams with `[DONE]` for streaming calls, preserving indentation and code formatting.
+  - **intent:** OmniRoute emits OpenAI-compatible JSON completions for non-streaming calls and SSE `chat.completion.chunk` streams with `[DONE]` for streaming calls, preserving indentation, code formatting, and emojis via code-point safe chunking (`Array.from`).
   - **success:** Non-streaming responses return HTTP 200 with standard `choices[0].message.content`; streaming responses emit text deltas without stripping tabs/newlines; errors return standard 401/502/504 JSON error objects.
 
 ## Constraints
 
-- **Single Input Serialization:** The Postman web chat editor operates as a single DOM input; concurrent requests must be serialized via a Promise mutex (`requestQueue`) to prevent overlapping text entry.
-- **Stabilization Polling:** Streaming response detection must observe at least 3-4 consecutive polling cycles (3.2s) of unchanged text before finalizing to accommodate model reasoning pauses.
-- **Cookie Security:** Raw cookie strings or bare session IDs must be normalized to `postman.sid=<value>` and stripped of extraneous quotes.
+- **Single Input Serialization:** The Postman web chat editor operates as a single DOM input; concurrent requests must be serialized via a Promise mutex (`requestQueue`) wrapped in `.catch().then()` and `finally { release(); }` to prevent overlapping text entry and deadlocks.
+- **Stabilization Polling:** Streaming response detection must observe at least 4 consecutive polling cycles (3.2s) of unchanged text before finalizing to accommodate model reasoning pauses.
+- **Cookie Security:** Raw cookie strings or bare session IDs must be normalized to `postman.sid=<value>` and stripped of extraneous quotes and header prefixes.
 - **Conformance with BaseExecutor:** The executor must return `{ response: Response, url: string, headers: Record<string, string>, transformedBody: any }` to maintain compatibility with `open-sse/handlers/chatCore.ts`.
+- **Process Lifecycle Safety:** Process shutdown listeners (`SIGINT`, `SIGTERM`, `beforeExit`) must close Playwright resources within a 2-second timeout and invoke `process.exit(0)` to prevent hanging server processes.
 
 ## Non-goals
 
@@ -51,11 +52,12 @@ Without this provider, developers must use manual Postman web UI or pay high dir
 
 ## Success Signal
 
-- `npm run typecheck:core` passes with exit code 0.
-- All unit tests in `open-sse/executors/__tests__/executor-postman-agent.test.ts` pass (5/5).
+- `npx tsc --noEmit` passes with exit code 0.
+- All unit tests in `tests/unit/executor-postman-agent.test.ts` pass (4/4).
+- All sweep tests in `tests/unit/executor-web-cookie-sweep.test.ts` pass (26/26).
 - Live API calls to `http://localhost:20128/v1/chat/completions` succeed with:
-  - Non-streaming math calculation (`25 * 25 = 625`).
-  - Streaming Vietnamese poem generation.
+  - Non-streaming math calculation (`1 + 1 = 2` or `25 * 25 = 625`).
+  - Streaming responses with `[DONE]`.
   - Multi-turn conversation context recall.
   - Model switching to `postman/gpt-5.6-sol` and `postman/gpt-5.6-terra`.
   - Tool schema recognition and JSON invocation.
@@ -63,8 +65,8 @@ Without this provider, developers must use manual Postman web UI or pay high dir
 ## Assumptions
 
 - The user possesses a valid Postman account with Enterprise Trial or AI Agent access enabled.
-- The default workspace `https://epsiloncryptoai-7880991.postman.co/workspace/280d1867-5a3e-41c7-8465-9e4b0edf866f/configure-mcp-servers?sideView=agentMode` serves as the primary endpoint unless custom `teamDomain` / `workspaceId` are provided in `providerSpecificData`.
-- Postman maintains DOM element `.ai-chat-agent-message` and `[contenteditable="true"]` for chat interaction.
+- The default workspace `https://go.postman.co/home?sideView=agentMode` serves as the primary fallback endpoint unless custom `teamDomain` / `workspaceId` are provided in `providerSpecificData`.
+- Postman maintains DOM elements `.ai-chat-input-send-button`, `.ai-chat-agent-message`, and `[contenteditable="true"]` for chat interaction.
 
 ## Open Questions
 
@@ -75,8 +77,9 @@ Without this provider, developers must use manual Postman web UI or pay high dir
 
 - [x] [Review][Patch] Fix Promise Mutex Queue exception handling to prevent permanent deadlock [open-sse/executors/postman-session.ts:211-221]
 - [x] [Review][Patch] Remove hardcoded private teamDomain/workspaceId fallback and support generic workspace URLs [open-sse/executors/postman-agent.ts:50-56]
-- [x] [Review][Patch] Add process SIGINT/SIGTERM lifecycle cleanup hooks for Chromium [open-sse/executors/postman-session.ts:66-71]
+- [x] [Review][Patch] Add process SIGINT/SIGTERM lifecycle cleanup hooks with process.exit [open-sse/executors/postman-session.ts:66-71]
 - [x] [Review][Patch] Use Unicode code-point safe chunking to prevent surrogate pair/emoji corruption in SSE streaming [open-sse/executors/postman-agent.ts:117-145]
 - [x] [Review][Patch] Strengthen model prefix stripping regex to handle case-insensitivity [open-sse/executors/postman-agent.ts:42-45]
 - [x] [Review][Patch] Ensure debounce/stabilization polling waits at least 3.2s for deep reasoning models [open-sse/executors/postman-session.ts:276-282]
 - [x] [Review][Patch] Update unit tests to align with credentials contract and exact error messages [tests/unit/executor-postman-agent.test.ts:1-71]
+- [x] [Review][Patch] Sanitize scripts/update-postman-cookies.ts to avoid committing live credentials to Git [scripts/update-postman-cookies.ts:1-27]

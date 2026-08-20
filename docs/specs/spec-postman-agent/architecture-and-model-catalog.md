@@ -26,27 +26,31 @@
                    │
                    ▼  (executor = "postman-agent")
          [PostmanAgentExecutor]
-                   │  - Formats multi-turn dialog
-                   │  - Injects tool schemas
+                   │  - Case-insensitive model prefix stripping (/^(postman-agent|postman)\//i)
+                   │  - Formats multi-turn dialog ([System Instruction], [User], [Assistant])
+                   │  - Injects tool schemas ([Tools Available])
+                   │  - Unicode-safe SSE streaming (Array.from code-point slicing)
                    │  - Normalizes cookies (postman.sid)
                    ▼
          [PostmanSession Manager]
                    │  - Singleton Headless Chromium (Playwright)
-                   │  - Serialized Mutex RequestQueue
+                   │  - Deadlock-proof Promise Mutex RequestQueue (.catch().then())
                    │  - execCommand("insertText") 0ms paste
                    │  - Dynamic Model Dropdown Switcher
-                   │  - 3.2s Debounced DOM Stream Observer
+                   │  - 3.2s Debounced DOM Stream Observer (stableTicks >= 4)
+                   │  - Graceful exit on SIGINT/SIGTERM with process.exit(0)
                    ▼
      [Postman Web Workspace Agent Mode]
-     (https://<team>.postman.co/workspace/<id>/configure-mcp-servers?sideView=agentMode)
+     (https://<team>.postman.co/workspace/<id>?sideView=agentMode OR https://go.postman.co/home?sideView=agentMode)
 ```
 
 ---
 
 ## 3. DOM Selectors & Wire Conventions
 
-- **Editor Selector:** `[contenteditable="true"]` inside `.ai-chat-input-editor-container`.
-- **Model Button Selector:** `button` containing `"Claude" | "GPT-" | "Thinking" | "Auto"`.
-- **Submit Button:** `button` immediately following active model button or last button in the input container.
+- **Editor Selector:** `[contenteditable="true"]` inside `.ai-chat-input-container`.
+- **Model Button Selector:** `button` inside `.ai-chat-input-container` containing `"Claude"` | `"GPT-"` | `"Thinking"` | `"Auto"`.
+- **Submit Button:** `.ai-chat-input-send-button` (with fallback to last button in `.ai-chat-input-container`).
 - **Agent Output Selector:** `.ai-chat-agent-message`.
-- **Stabilization Condition:** `messages[messages.length - 1]` length unchanged for `stableTicks >= 3` (interval 800ms = 2.4s-3.2s).
+- **Stabilization Condition:** `messages[messages.length - 1]` content unchanged for `stableTicks >= 4` (interval 800ms = 3.2s).
+- **Process Exit Handlers:** `beforeExit`, `SIGINT`, `SIGTERM` with 2000ms race timeout and `process.exit(0)`.
