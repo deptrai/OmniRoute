@@ -299,16 +299,22 @@ export async function askPostmanAgent(
 
     const page = await getOrInitPostmanPage(cookieStr, workspaceUrl);
 
-    const editor = await page.$('[contenteditable="true"]');
+    const editorSelector = '[contenteditable="true"]';
+    await page.waitForSelector(editorSelector, { state: "visible", timeout: 15000 });
+    const editor = await page.$(editorSelector);
     if (!editor) throw new Error("Postman Agent editor not found");
 
     // Select target model
     await selectTargetModel(page, modelName);
 
-    const prevCount = await page.$$eval(".ai-chat-agent-message", (els) => els.length);
+    // Record previous conversation container text
+    const prevText = await page.evaluate(() => {
+      const c = document.querySelector('[data-testid="ai-chat-conversation-container"]');
+      return c ? (c as HTMLElement).innerText || "" : "";
+    });
 
-    // Focus & insert text safely using execCommand
-    await editor.click({ force: true });
+    // Focus & insert text safely
+    await editor.focus();
     await page.evaluate((text) => {
       const el = document.querySelector('[contenteditable="true"]') as HTMLElement | null;
       if (!el) return;
@@ -320,47 +326,60 @@ export async function askPostmanAgent(
 
     await page.waitForTimeout(300);
 
-    // Click explicit send button .ai-chat-input-send-button
-    await page.evaluate(() => {
-      const sendBtn = document.querySelector(".ai-chat-input-send-button") as HTMLElement | null;
-      if (sendBtn) {
-        sendBtn.click();
-      } else {
-        const btns = Array.from(document.querySelectorAll(".ai-chat-input-container button"));
-        const lastBtn = btns[btns.length - 1] as HTMLElement | null;
-        if (lastBtn) lastBtn.click();
-      }
-    });
+    // Click explicit send button
+    const sendBtn = await page.$(".ai-chat-input-send-button");
+    if (sendBtn) {
+      await sendBtn.click();
+    } else {
+      await page.keyboard.press("Enter");
+    }
 
-    // Wait for new agent message element to stream and stabilize (up to 60s timeout)
+    // Wait for response text in ai-chat-conversation-container to generate and finish
     let responseText = "";
     const start = Date.now();
     let lastText = "";
     let stableTicks = 0;
 
-    while (Date.now() - start < 60000) {
+    while (Date.now() - start < 45000) {
       if (signal?.aborted) {
         throw new Error("Request aborted by client during generation.");
       }
 
       await page.waitForTimeout(800);
-      const messages = await page.$$eval(".ai-chat-agent-message", (els) =>
-        els.map((e) => (e as HTMLElement).innerText.trim())
-      );
+      const state = await page.evaluate((pLen) => {
+        const container = document.querySelector(
+          '[data-testid="ai-chat-conversation-container"]'
+        ) as HTMLElement | null;
+        if (!container) return null;
+        const full = container.innerText || "";
+        const isGenerating = full.includes("Generating...");
+        const newChunk = full.slice(pLen);
+        return { newChunk, isGenerating };
+      }, prevText.length);
 
-      if (messages.length > prevCount) {
-        const latestMsg = messages[messages.length - 1];
-        if (latestMsg && latestMsg.length > 0) {
-          if (latestMsg === lastText) {
-            stableTicks++;
-            if (stableTicks >= 4) {
-              // Stable for 3.2s
-              responseText = latestMsg;
-              break;
-            }
+      if (state && state.newChunk.length > 0) {
+        if (!state.isGenerating) {
+          let cleaned = state.newChunk;
+          const doubleNlIdx = state.newChunk.indexOf("\n\n");
+          if (doubleNlIdx !== -1) {
+            cleaned = state.newChunk.slice(doubleNlIdx + 2).trim();
           } else {
-            lastText = latestMsg;
-            stableTicks = 0;
+            cleaned = state.newChunk
+              .replace(/\[(?:System Instruction|User|Assistant)\]:?[^\n]*/gi, "")
+              .trim();
+          }
+
+          if (cleaned.length > 0) {
+            if (cleaned === lastText) {
+              stableTicks++;
+              if (stableTicks >= 2) {
+                responseText = cleaned;
+                break;
+              }
+            } else {
+              lastText = cleaned;
+              stableTicks = 0;
+            }
           }
         }
       }
