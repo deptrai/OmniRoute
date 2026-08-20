@@ -2529,7 +2529,10 @@ export async function handleComboChat({
               );
             }
           }
-          log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status });
+          log.warn("COMBO", `Model ${modelStr} failed, trying next`, {
+            status: result.status,
+            errorBody: redactConnectionLabel(errorText),
+          });
 
           if (resilienceSettings.providerCooldown.enabled && provider && provider !== "unknown") {
             recordProviderCooldown(
@@ -3349,7 +3352,10 @@ async function handleRoundRobinCombo({
         lastError = errorText || String(result.status);
         if (!lastStatus) lastStatus = result.status;
         if (offset > 0) fallbackCount++;
-        log.warn("COMBO-RR", `${modelStr} failed, trying next model`, { status: result.status });
+        log.warn("COMBO-RR", `${modelStr} failed, trying next model`, {
+          status: result.status,
+          errorBody: redactConnectionLabel(errorText),
+        });
 
         if (resilienceSettings.providerCooldown.enabled && provider && provider !== "unknown") {
           recordProviderCooldown(
