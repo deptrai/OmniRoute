@@ -1,7 +1,34 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 
-function parseCookies(raw: string) {
+interface ParsedCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+}
+
+function parseCookies(raw: string): ParsedCookie[] {
   let cleaned = raw.trim().replace(/^cookie:\s*/i, "");
+
+  // Support JSON array format (e.g. exported from Chrome DevTools / Cookie-Editor / EditThisCookie)
+  if (cleaned.startsWith("[")) {
+    try {
+      const parsedJson = JSON.parse(cleaned);
+      if (Array.isArray(parsedJson)) {
+        return parsedJson
+          .filter((item) => item && typeof item === "object" && item.name && item.value)
+          .map((item) => ({
+            name: String(item.name).trim(),
+            value: String(item.value).trim(),
+            domain: item.domain ? String(item.domain).trim() : undefined,
+            path: item.path ? String(item.path).trim() : "/",
+          }));
+      }
+    } catch {
+      // Fallback to standard semicolon parsing if JSON.parse fails
+    }
+  }
+
   if (!cleaned.includes("=")) {
     return [{ name: "postman.sid", value: cleaned }];
   }
@@ -130,7 +157,7 @@ export async function getOrInitPostmanPage(
     const domainMatches = targetUrl.match(/https?:\/\/([^/?#]+)/i);
     const hostDomain = domainMatches ? `.${domainMatches[1]}` : ".postman.co";
 
-    const domains = Array.from(
+    const defaultDomains = Array.from(
       new Set([
         ".postman.co",
         ".postman.com",
@@ -140,16 +167,18 @@ export async function getOrInitPostmanPage(
       ])
     );
 
-    for (const d of domains) {
-      await contextInstance.addCookies(
-        parsed.map((c) => ({
-          name: c.name,
-          value: c.value,
-          domain: d,
-          path: "/",
-          secure: true,
-        }))
-      );
+    for (const c of parsed) {
+      for (const d of defaultDomains) {
+        await contextInstance.addCookies([
+          {
+            name: c.name,
+            value: c.value,
+            domain: d,
+            path: c.path || "/",
+            secure: true,
+          },
+        ]);
+      }
     }
 
     pageInstance = await contextInstance.newPage();
