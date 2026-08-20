@@ -307,11 +307,8 @@ export async function askPostmanAgent(
     // Select target model
     await selectTargetModel(page, modelName);
 
-    // Record previous conversation container text
-    const prevText = await page.evaluate(() => {
-      const c = document.querySelector('[data-testid="ai-chat-conversation-container"]');
-      return c ? (c as HTMLElement).innerText || "" : "";
-    });
+    // Record initial count of agent messages
+    const prevAgentCount = await page.$$eval(".ai-chat-agent-message", (els) => els.length);
 
     // Focus & insert text safely
     await editor.focus();
@@ -334,7 +331,7 @@ export async function askPostmanAgent(
       await page.keyboard.press("Enter");
     }
 
-    // Wait for response text in ai-chat-conversation-container to generate and finish
+    // Wait for response text in .ai-chat-agent-message to generate and finish
     let responseText = "";
     const start = Date.now();
     let lastText = "";
@@ -346,40 +343,28 @@ export async function askPostmanAgent(
       }
 
       await page.waitForTimeout(800);
-      const state = await page.evaluate((pLen) => {
-        const container = document.querySelector(
-          '[data-testid="ai-chat-conversation-container"]'
-        ) as HTMLElement | null;
-        if (!container) return null;
-        const full = container.innerText || "";
-        const isGenerating = full.includes("Generating...");
-        const newChunk = full.slice(pLen);
-        return { newChunk, isGenerating };
-      }, prevText.length);
+      const state = await page.evaluate((prev) => {
+        const msgs = Array.from(document.querySelectorAll(".ai-chat-agent-message"));
+        if (msgs.length <= prev) return { hasNew: false, text: "", isGenerating: true };
+        const last = msgs[msgs.length - 1] as HTMLElement;
+        return {
+          hasNew: true,
+          text: last.innerText?.trim() || "",
+          isGenerating: document.body.innerText.includes("Generating..."),
+        };
+      }, prevAgentCount);
 
-      if (state && state.newChunk.length > 0) {
+      if (state && state.hasNew && state.text.length > 0) {
         if (!state.isGenerating) {
-          let cleaned = state.newChunk;
-          const doubleNlIdx = state.newChunk.indexOf("\n\n");
-          if (doubleNlIdx !== -1) {
-            cleaned = state.newChunk.slice(doubleNlIdx + 2).trim();
-          } else {
-            cleaned = state.newChunk
-              .replace(/\[(?:System Instruction|User|Assistant)\]:?[^\n]*/gi, "")
-              .trim();
-          }
-
-          if (cleaned.length > 0) {
-            if (cleaned === lastText) {
-              stableTicks++;
-              if (stableTicks >= 2) {
-                responseText = cleaned;
-                break;
-              }
-            } else {
-              lastText = cleaned;
-              stableTicks = 0;
+          if (state.text === lastText) {
+            stableTicks++;
+            if (stableTicks >= 2) {
+              responseText = state.text;
+              break;
             }
+          } else {
+            lastText = state.text;
+            stableTicks = 0;
           }
         }
       }

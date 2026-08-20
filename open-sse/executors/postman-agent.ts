@@ -53,15 +53,8 @@ function extractText(content: unknown): string {
   return String(content || "");
 }
 
-function formatConversationPrompt(messages: MessageItem[], tools?: unknown[]): string {
+function formatConversationPrompt(messages: MessageItem[]): string {
   const parts: string[] = [];
-
-  // If tools are provided, inject tool schema definitions
-  if (Array.isArray(tools) && tools.length > 0) {
-    parts.push(
-      `[Tools Available]:\n${JSON.stringify(tools, null, 2)}\nIf you choose to invoke a tool, respond with a JSON code block or standard tool call format.`
-    );
-  }
 
   // Format all conversation turns
   for (const m of messages) {
@@ -72,7 +65,7 @@ function formatConversationPrompt(messages: MessageItem[], tools?: unknown[]): s
     } else if (m.role === "assistant") {
       parts.push(`[Assistant]:\n${text}`);
     } else {
-      parts.push(`[User]:\n${text}`);
+      parts.push(text);
     }
   }
 
@@ -119,8 +112,8 @@ export class PostmanAgentExecutor extends BaseExecutor {
     const baseCleanKey = cleanModelKey.replace(/-(xhigh|high|medium|low|none)$/i, "");
     const postmanModel = MODEL_MAP[cleanModelKey] || MODEL_MAP[baseCleanKey] || "Claude Opus 4.8";
 
-    // Format full multi-turn conversation and tools
-    const prompt = formatConversationPrompt(messages, tools);
+    // Format full multi-turn conversation
+    const prompt = formatConversationPrompt(messages);
 
     if (!prompt) {
       return makeErrorResult(
