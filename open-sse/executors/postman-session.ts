@@ -245,29 +245,37 @@ export async function getOrInitPostmanPage(
 async function selectTargetModel(page: Page, targetModelName: string): Promise<void> {
   try {
     await page.evaluate(async (modelName) => {
-      const container =
-        document.querySelector('[contenteditable="true"]')?.closest(".ai-chat-input-container") ||
-        document.body;
-      const btns = Array.from(container.querySelectorAll("button"));
-      const currentModelBtn = btns.find(
-        (b) =>
-          b.textContent?.includes("Auto") ||
-          b.textContent?.includes("GPT-") ||
-          b.textContent?.includes("Claude") ||
-          b.textContent?.includes("Thinking")
+      const modelBtn = document.querySelector(
+        ".ai-chat-input-bottom-section button.MenuButton__StyledMenuButton-sc-3281258f-0"
+      ) as HTMLElement | null;
+
+      if (!modelBtn) return;
+      const currentText = modelBtn.innerText?.trim() || "";
+      if (currentText.toLowerCase().includes(modelName.toLowerCase())) {
+        return;
+      }
+
+      modelBtn.click();
+      await new Promise((r) => setTimeout(r, 400));
+
+      const menuItems = Array.from(
+        document.querySelectorAll(
+          '.szh-menu-container [role="menuitem"], .szh-menu__item, [role="menuitem"]'
+        )
+      ) as HTMLElement[];
+
+      const targetItem = menuItems.find((b) =>
+        b.innerText?.toLowerCase().includes(modelName.toLowerCase())
       );
 
-      if (
-        currentModelBtn &&
-        !currentModelBtn.textContent?.toLowerCase().includes(modelName.toLowerCase())
-      ) {
-        currentModelBtn.click();
-        await new Promise((r) => setTimeout(r, 400));
-        const targetItem = Array.from(document.querySelectorAll("button, [role='menuitem']")).find(
-          (b) => b.textContent?.toLowerCase().includes(modelName.toLowerCase())
-        );
-        if (targetItem) {
-          (targetItem as HTMLElement).click();
+      if (targetItem) {
+        targetItem.click();
+      } else {
+        const autoItem = menuItems.find((b) => b.innerText?.toLowerCase().includes("auto"));
+        if (autoItem) {
+          autoItem.click();
+        } else {
+          document.body.click();
         }
       }
     }, targetModelName);
