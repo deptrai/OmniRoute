@@ -112,7 +112,7 @@ interface SearchHandlerOptions {
 
 // ── Constants ────────────────────────────────────────────────────────────
 
-const GLOBAL_TIMEOUT_MS = 15_000;
+const GLOBAL_TIMEOUT_MS = 60_000;
 
 // Non-retriable HTTP status codes — fail immediately, don't try alternate.
 // 404 is only retriable for SearXNG, where a load balancer may return it when

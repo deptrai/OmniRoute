@@ -189,7 +189,7 @@ export const SEARCH_PROVIDERS: Record<string, SearchProviderConfig> = {
     searchTypes: ["web", "news"],
     defaultMaxResults: 5,
     maxMaxResults: 50,
-    timeoutMs: 10_000,
+    timeoutMs: 30_000,
     cacheTTLMs: 3 * 60 * 1000,
   },
 

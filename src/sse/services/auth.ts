@@ -1501,7 +1501,7 @@ export async function getProviderCredentials(
     const orderedConnections = withQuota;
 
     const settings = await getSettings();
-    const strategy = settings.fallbackStrategy || "fill-first";
+    const strategy = settings.fallbackStrategy || "round-robin";
     const sessionAffinityTtlMs =
       provider === "codex"
         ? Number.isFinite(Number(options.sessionAffinityTtlMs)) &&

@@ -95,7 +95,7 @@ export async function getSettings() {
     cloudEnabled: true,
     tailscaleEnabled: false,
     tailscaleUrl: "",
-    stickyRoundRobinLimit: 3,
+    stickyRoundRobinLimit: 1,
     requestRetry: 3,
     maxRetryIntervalSec: 30,
     antigravitySignatureCacheMode: "enabled",
