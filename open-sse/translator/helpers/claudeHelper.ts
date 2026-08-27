@@ -9,10 +9,7 @@ import { getModelTargetFormat } from "../../config/providerModels.ts";
 // dispatching Claude-shape requests to these providers. Anthropic Claude and
 // other Claude-compatible upstreams that do accept it are unaffected.
 // Ported from upstream decolua/9router#820 by @hiepau1231.
-const CLAUDE_FORMAT_PROVIDERS_WITHOUT_OUTPUT_CONFIG = new Set<string>([
-  "minimax",
-  "minimax-cn",
-]);
+const CLAUDE_FORMAT_PROVIDERS_WITHOUT_OUTPUT_CONFIG = new Set<string>(["minimax", "minimax-cn"]);
 
 // Placeholder thinking text used as last-resort fallback when:
 //   - Target upstream is a non-Anthropic Claude-shape provider
@@ -65,18 +62,17 @@ type ClaudeRequestBody = {
 //   - "<system-reminder>This file is already in your context ..."
 const CLAUDE_CODE_UNCHANGED_NOTICE =
   `[Notice: The content of this file has already been retrieved earlier in this conversation ` +
-  `and is unchanged on disk. Do NOT call Read on this file again. ` +
+  `and is unchanged on disk. Do NOT call Read or inspect this file again. ` +
   `Use the previously retrieved file content from your conversation history ` +
   `and proceed directly with your task.]`;
 
+// Anchored regex matching all known Claude Code CLI file-unchanged sentinels at the start of content
+const CLAUDE_CODE_SENTINEL_REGEX =
+  /^\s*(?:wasted call\s*[—–-]\s*file unchanged|file unchanged since last read|<system-reminder>\s*this file is already in your context)/i;
+
 export function normalizeClaudeCodeToolResult(content: string): string {
   if (typeof content !== "string" || !content) return content;
-  if (
-    content.startsWith("Wasted call") ||
-    content.startsWith("File unchanged since last read") ||
-    content.startsWith("<system-reminder>This file is already in your context") ||
-    content.includes("file unchanged since your last Read")
-  ) {
+  if (CLAUDE_CODE_SENTINEL_REGEX.test(content)) {
     return CLAUDE_CODE_UNCHANGED_NOTICE;
   }
   return content;

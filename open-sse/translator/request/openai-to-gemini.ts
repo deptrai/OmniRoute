@@ -435,6 +435,17 @@ function openaiToGeminiBase(
               name = sanitizeToolName(name);
 
               let resp = toolResponses[fid];
+              if (Array.isArray(resp)) {
+                resp = resp
+                  .map((p) =>
+                    typeof p === "string"
+                      ? p
+                      : typeof p === "object" && p !== null && "text" in p
+                        ? String((p as { text: unknown }).text)
+                        : JSON.stringify(p)
+                  )
+                  .join("\n");
+              }
               if (typeof resp === "string") {
                 resp = normalizeClaudeCodeToolResult(resp);
               }
@@ -470,7 +481,21 @@ function openaiToGeminiBase(
                 if (!resolvedSignatures.has(id) && toolResponses[id]) {
                   const fn = tc.function as { name?: string } | undefined;
                   const name = tcID2Name[id] || fn?.name || "unknown";
-                  const resp = toolResponses[id];
+                  let resp = toolResponses[id];
+                  if (Array.isArray(resp)) {
+                    resp = resp
+                      .map((p) =>
+                        typeof p === "string"
+                          ? p
+                          : typeof p === "object" && p !== null && "text" in p
+                            ? String((p as { text: unknown }).text)
+                            : JSON.stringify(p)
+                      )
+                      .join("\n");
+                  }
+                  if (typeof resp === "string") {
+                    resp = normalizeClaudeCodeToolResult(resp);
+                  }
                   toolParts.push({
                     text:
                       signaturelessToolCallMode === "text"
