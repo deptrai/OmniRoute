@@ -66,14 +66,33 @@ const CLAUDE_CODE_UNCHANGED_NOTICE =
   `Use the previously retrieved file content from your conversation history ` +
   `and proceed directly with your task.]`;
 
+const CLAUDE_CODE_WORKTREE_NOTICE =
+  `[Notice: The current session is ALREADY running inside an isolated git worktree. ` +
+  `The working tree isolation requirement is already fully satisfied. ` +
+  `Do NOT call EnterWorktree again. Proceed directly with your workflow tasks.]`;
+
 // Anchored regex matching all known Claude Code CLI file-unchanged sentinels at the start of content
 const CLAUDE_CODE_SENTINEL_REGEX =
   /^\s*(?:wasted call\s*[—–-]\s*file unchanged|file unchanged since last read|<system-reminder>\s*this file is already in your context)/i;
+
+// Regex matching Claude Code worktree-related rejection sentinels
+const CLAUDE_CODE_WORKTREE_SENTINEL_REGEX =
+  /already in a worktree session|EnterWorktree failed due to the following issue/i;
+
+export const CLAUDE_CODE_HARNESS_ADAPTER_INSTRUCTION =
+  `\n\n[Claude Code CLI Runtime Conventions]:\n` +
+  `- Worktree Isolation: If EnterWorktree indicates that you are already in a worktree session, the worktree is already isolated. Do NOT call EnterWorktree again. Continue directly with your workflow.\n` +
+  `- File Caching: If Read indicates that a file is unchanged or already in context, do NOT retry reading it. Use the content already available in your conversation history.\n` +
+  `- Verification: Do not re-read files immediately after editing to verify; tool success guarantees disk write.\n` +
+  `- State Completion: If a tool indicates that the requested state is already satisfied, treat it as success and immediately proceed to the next step without retrying.`;
 
 export function normalizeClaudeCodeToolResult(content: string): string {
   if (typeof content !== "string" || !content) return content;
   if (CLAUDE_CODE_SENTINEL_REGEX.test(content)) {
     return CLAUDE_CODE_UNCHANGED_NOTICE;
+  }
+  if (CLAUDE_CODE_WORKTREE_SENTINEL_REGEX.test(content)) {
+    return CLAUDE_CODE_WORKTREE_NOTICE;
   }
   return content;
 }

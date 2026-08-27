@@ -1,7 +1,10 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.ts";
-import { normalizeClaudeCodeToolResult } from "../helpers/claudeHelper.ts";
+import {
+  normalizeClaudeCodeToolResult,
+  CLAUDE_CODE_HARNESS_ADAPTER_INSTRUCTION,
+} from "../helpers/claudeHelper.ts";
 
 type JsonRecord = Record<string, unknown>;
 const TOOL_CHOICE_ANY = ["a", "n", "y"].join("");
@@ -159,10 +162,24 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
             .join("\n")
         : stripAnthropicBillingHeader(body.system);
 
-    if (systemHasCacheControl || systemContent) {
+    let finalSystemContent = systemContent;
+    const isClaudeCodeSession =
+      (typeof systemContent === "string" && systemContent.includes("Claude Code")) ||
+      (Array.isArray(body.tools) &&
+        body.tools.some(
+          (t) =>
+            (t as { name?: string })?.name === "EnterWorktree" ||
+            (t as { name?: string })?.name === "Read"
+        ));
+
+    if (isClaudeCodeSession && typeof finalSystemContent === "string") {
+      finalSystemContent += CLAUDE_CODE_HARNESS_ADAPTER_INSTRUCTION;
+    }
+
+    if (systemHasCacheControl || finalSystemContent) {
       result.messages.push({
         role: "system",
-        content: systemContent,
+        content: finalSystemContent,
       });
     }
   }
@@ -413,9 +430,7 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
             function: {
               name: block.name,
               arguments:
-                typeof block.input === "string"
-                  ? block.input
-                  : JSON.stringify(block.input || {}),
+                typeof block.input === "string" ? block.input : JSON.stringify(block.input || {}),
             },
           });
           break;

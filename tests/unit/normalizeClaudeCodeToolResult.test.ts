@@ -118,3 +118,46 @@ test("claudeToGeminiRequest normalizes Claude Code sentinels in tool_result mess
     "Expected functionResponse to contain normalized notice"
   );
 });
+
+test("normalizeClaudeCodeToolResult normalizes worktree sentinels", () => {
+  const worktreeSentinels = [
+    'Already in a worktree session. Pass `path` to switch into another existing worktree, or pass `action: "exit"` to leave the current worktree.',
+    "<tool_use_error>Already in a worktree session. Pass `path` to switch into another existing worktree</tool_use_error>",
+    "<tool_use_error>InputValidationError: EnterWorktree failed due to the following issue:\nAn unexpected parameter `reason` was provided</tool_use_error>",
+  ];
+
+  for (const s of worktreeSentinels) {
+    const result = normalizeClaudeCodeToolResult(s);
+    assert.match(
+      result,
+      /Notice: The current session is ALREADY running inside an isolated git worktree/i,
+      `Expected worktree notice for sentinel: ${JSON.stringify(s)}`
+    );
+    assert.match(
+      result,
+      /Do NOT call EnterWorktree again/i,
+      `Expected instruction not to call EnterWorktree for sentinel: ${JSON.stringify(s)}`
+    );
+  }
+});
+
+test("claudeToOpenAIRequest injects Claude Code harness adapter instructions for Claude Code sessions", () => {
+  const body = {
+    system: "You are Claude Code, Anthropic's official CLI for Claude.",
+    messages: [
+      {
+        role: "user",
+        content: "hello",
+      },
+    ],
+  };
+
+  const converted = claudeToOpenAIRequest("gpt-4o", body, false);
+  const sysMsg = converted.messages.find((m: any) => m.role === "system");
+  assert.ok(sysMsg, "Expected system message to exist");
+  assert.match(
+    sysMsg.content,
+    /Claude Code CLI Runtime Conventions/i,
+    "Expected harness adapter instructions in system prompt"
+  );
+});
