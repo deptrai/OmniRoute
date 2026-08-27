@@ -1,6 +1,7 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.ts";
+import { normalizeClaudeCodeToolResult } from "../helpers/claudeHelper.ts";
 
 type JsonRecord = Record<string, unknown>;
 const TOOL_CHOICE_ANY = ["a", "n", "y"].join("");
@@ -454,7 +455,7 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
           toolResults.push({
             role: "tool",
             tool_call_id: block.tool_use_id,
-            content: resultContent,
+            content: normalizeClaudeCodeToolResult(resultContent),
           });
           break;
       }

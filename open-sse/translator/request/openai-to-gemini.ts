@@ -24,6 +24,7 @@ import {
   cleanJSONSchemaForAntigravity,
 } from "../helpers/geminiHelper.ts";
 import { buildGeminiTools, sanitizeGeminiToolName } from "../helpers/geminiToolsSanitizer.ts";
+import { normalizeClaudeCodeToolResult } from "../helpers/claudeHelper.ts";
 import {
   type GeminiGenerationConfig,
   isVertexGeminiProvider,
@@ -433,7 +434,10 @@ function openaiToGeminiBase(
               }
               name = sanitizeToolName(name);
 
-              const resp = toolResponses[fid];
+              let resp = toolResponses[fid];
+              if (typeof resp === "string") {
+                resp = normalizeClaudeCodeToolResult(resp);
+              }
               let parsedResp = tryParseJSON(resp);
               if (parsedResp === null) {
                 parsedResp = { result: resp };
