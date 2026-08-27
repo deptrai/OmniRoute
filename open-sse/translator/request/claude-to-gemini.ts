@@ -8,6 +8,7 @@ import {
 import { DEFAULT_THINKING_GEMINI_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
 import { buildGeminiTools, sanitizeGeminiToolName } from "../helpers/geminiToolsSanitizer.ts";
 import { capMaxOutputTokens, capThinkingBudget } from "../../../src/lib/modelCapabilities.ts";
+import { normalizeClaudeCodeToolResult } from "../helpers/claudeHelper.ts";
 
 /**
  * Direct Claude → Gemini request translator.
@@ -126,6 +127,9 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
                 content = content
                   .map((c) => (c.type === "text" ? c.text : JSON.stringify(c)))
                   .join("\n");
+              }
+              if (typeof content === "string") {
+                content = normalizeClaudeCodeToolResult(content);
               }
               let parsedContent = tryParseJSON(content);
               if (parsedContent === null) {
