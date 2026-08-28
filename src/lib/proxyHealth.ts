@@ -121,6 +121,15 @@ export function invalidateProxyHealth(proxyUrl: string): void {
 }
 
 /**
+ * Clear every cached proxy health entry. Test-only reset hook so proxy
+ * reachability checks start from a clean slate between test runs.
+ */
+export function resetProxyHealthCache(): void {
+  proxyHealthCache.clear();
+  proxyHealthInflight.clear();
+}
+
+/**
  * Get all currently cached proxy health entries (for dashboard display).
  */
 export function getAllProxyHealthStatuses(): Array<{

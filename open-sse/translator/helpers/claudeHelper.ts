@@ -9,10 +9,7 @@ import { getModelTargetFormat } from "../../config/providerModels.ts";
 // dispatching Claude-shape requests to these providers. Anthropic Claude and
 // other Claude-compatible upstreams that do accept it are unaffected.
 // Ported from upstream decolua/9router#820 by @hiepau1231.
-const CLAUDE_FORMAT_PROVIDERS_WITHOUT_OUTPUT_CONFIG = new Set<string>([
-  "minimax",
-  "minimax-cn",
-]);
+const CLAUDE_FORMAT_PROVIDERS_WITHOUT_OUTPUT_CONFIG = new Set<string>(["minimax", "minimax-cn"]);
 
 // Placeholder thinking text used as last-resort fallback when:
 //   - Target upstream is a non-Anthropic Claude-shape provider
@@ -71,11 +68,14 @@ const CLAUDE_CODE_UNCHANGED_NOTICE =
 
 export function normalizeClaudeCodeToolResult(content: string): string {
   if (typeof content !== "string" || !content) return content;
+  const trimmed = content.trim();
+  const lower = trimmed.toLowerCase();
   if (
-    content.startsWith("Wasted call") ||
-    content.startsWith("File unchanged since last read") ||
-    content.startsWith("<system-reminder>This file is already in your context") ||
-    content.includes("file unchanged since your last Read")
+    lower.startsWith("wasted call") ||
+    lower.startsWith("file unchanged since last read") ||
+    lower.startsWith("<system-reminder>this file is already in your context") ||
+    lower.includes("file unchanged since your last read") ||
+    lower.includes("this file is already in your context")
   ) {
     return CLAUDE_CODE_UNCHANGED_NOTICE;
   }

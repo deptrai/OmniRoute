@@ -262,7 +262,9 @@ function openaiToGeminiBase(
   if (messages && Array.isArray(messages)) {
     for (const msg of messages) {
       if (msg.role === "tool" && msg.tool_call_id) {
-        toolResponses[msg.tool_call_id as string] = msg.content;
+        const rawContent = msg.content;
+        toolResponses[msg.tool_call_id as string] =
+          typeof rawContent === "string" ? normalizeClaudeCodeToolResult(rawContent) : rawContent;
       }
     }
   }

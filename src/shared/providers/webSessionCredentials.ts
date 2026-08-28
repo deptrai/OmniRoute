@@ -219,6 +219,13 @@ export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
     acceptsFullCookieHeader: true,
     storageKeys: ["cookie", "manus_session"],
   },
+  "postman-agent": {
+    kind: "cookie",
+    credentialName: "postman.sid",
+    placeholder: "postman.sid=... or full Cookie header from www.postman.com",
+    acceptsFullCookieHeader: true,
+    storageKeys: ["cookie", "postman.sid", "postmanSid"],
+  },
   lmarena: {
     kind: "cookie",
     // lmarena.ai's auth cookie is `arena-auth-prod-v1` (the legacy hint said `session`,

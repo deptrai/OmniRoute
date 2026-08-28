@@ -14,6 +14,7 @@ const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
 const tokenRefresh = await import("../../src/sse/services/tokenRefresh.ts");
+const { resetProxyHealthCache } = await import("../../src/lib/proxyHealth.ts");
 const { PROVIDERS, OAUTH_ENDPOINTS } = await import("../../open-sse/config/constants.ts");
 
 function jsonResponse(body, status = 200) {
@@ -27,6 +28,7 @@ async function resetStorage() {
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+  resetProxyHealthCache();
 }
 
 async function withMockedFetch(fetchImpl, fn) {
@@ -78,16 +80,48 @@ async function withHttpServer(handler, fn) {
 
 async function withConnectProxyServer(fn, options = {}) {
   const connectRequests = [];
-  const server = http.createServer((_req, res) => {
-    res.writeHead(501);
-    res.end("CONNECT only");
+  const server = http.createServer((req, res) => {
+    // Forward plain HTTP proxy requests (GET/POST/...) in addition to CONNECT.
+    // undici's ProxyAgent uses CONNECT only for HTTPS targets; for HTTP targets
+    // it forwards the full URL to the proxy, so a test proxy that only speaks
+    // CONNECT returns 501 and breaks the "OAuth refresh prefers connection proxy
+    // over provider proxy" scenario.
+    const targetUrl = new URL(
+      String(req.url || ""),
+      `http://${String(req.headers.host || "localhost")}`
+    );
+    connectRequests.push(targetUrl.host);
+    const targetHost = (options as any).targetHost || targetUrl.hostname;
+    const targetPort = Number((options as any).targetPort || targetUrl.port || 80);
+
+    const proxyReq = http.request(
+      {
+        host: targetHost,
+        port: targetPort,
+        path: targetUrl.pathname + targetUrl.search,
+        method: req.method,
+        headers: { ...req.headers, host: targetUrl.host },
+      },
+      (proxyRes) => {
+        res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+        proxyRes.pipe(res);
+      }
+    );
+
+    proxyReq.on("error", (error) => {
+      console.error("[TestProxy] Forward error:", error.message);
+      res.writeHead(502);
+      res.end("Bad Gateway");
+    });
+
+    req.pipe(proxyReq);
   });
 
   server.on("connect", (req, clientSocket, head) => {
     connectRequests.push(String(req.url || ""));
     const [host, portText] = String(req.url || "").split(":");
-    const targetHost = options.targetHost || host;
-    const targetPort = Number(options.targetPort || portText || 80);
+    const targetHost = (options as any).targetHost || host;
+    const targetPort = Number((options as any).targetPort || portText || 80);
     const upstreamSocket = net.connect(targetPort, targetHost, () => {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head && head.length > 0) {
