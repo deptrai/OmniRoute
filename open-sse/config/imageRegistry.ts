@@ -366,6 +366,7 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
 
   antigravity: {
     id: "antigravity",
+    alias: "agy",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
     authType: "oauth",
     authHeader: "bearer",
