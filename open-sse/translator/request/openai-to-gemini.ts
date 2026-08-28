@@ -24,7 +24,10 @@ import {
   cleanJSONSchemaForAntigravity,
 } from "../helpers/geminiHelper.ts";
 import { buildGeminiTools, sanitizeGeminiToolName } from "../helpers/geminiToolsSanitizer.ts";
-import { normalizeClaudeCodeToolResult } from "../helpers/claudeHelper.ts";
+import {
+  normalizeClaudeCodeToolResult,
+  CLAUDE_CODE_HARNESS_ADAPTER_INSTRUCTION,
+} from "../helpers/claudeHelper.ts";
 import {
   type GeminiGenerationConfig,
   isVertexGeminiProvider,
@@ -274,8 +277,25 @@ function openaiToGeminiBase(
       const content = msg.content;
 
       if (role === "system" && messages.length > 1) {
-        const systemText = typeof content === "string" ? content : extractTextContent(content);
+        let systemText = typeof content === "string" ? content : extractTextContent(content);
         if (systemText) {
+          const isClaudeCodeSession =
+            systemText.includes("Claude Code") ||
+            (Array.isArray(body.tools) &&
+              body.tools.some(
+                (t) =>
+                  (t as { function?: { name?: string }; name?: string })?.name ===
+                    "EnterWorktree" ||
+                  (t as { function?: { name?: string }; name?: string })?.name === "Read" ||
+                  (t as { function?: { name?: string }; name?: string })?.function?.name ===
+                    "EnterWorktree" ||
+                  (t as { function?: { name?: string }; name?: string })?.function?.name === "Read"
+              ));
+
+          if (isClaudeCodeSession) {
+            systemText += CLAUDE_CODE_HARNESS_ADAPTER_INSTRUCTION;
+          }
+
           if (!result.systemInstruction) {
             result.systemInstruction = {
               role: "system",

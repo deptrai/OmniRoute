@@ -8,7 +8,10 @@ import {
 import { DEFAULT_THINKING_GEMINI_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
 import { buildGeminiTools, sanitizeGeminiToolName } from "../helpers/geminiToolsSanitizer.ts";
 import { capMaxOutputTokens, capThinkingBudget } from "../../../src/lib/modelCapabilities.ts";
-import { normalizeClaudeCodeToolResult } from "../helpers/claudeHelper.ts";
+import {
+  normalizeClaudeCodeToolResult,
+  CLAUDE_CODE_HARNESS_ADAPTER_INSTRUCTION,
+} from "../helpers/claudeHelper.ts";
 
 /**
  * Direct Claude → Gemini request translator.
@@ -70,6 +73,22 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
     } else {
       systemText = String(body.system);
     }
+
+    const isClaudeCodeSession =
+      (typeof systemText === "string" && systemText.includes("Claude Code")) ||
+      (Array.isArray(body.tools) &&
+        body.tools.some(
+          (t) =>
+            t?.name === "EnterWorktree" ||
+            t?.name === "Read" ||
+            t?.function?.name === "EnterWorktree" ||
+            t?.function?.name === "Read"
+        ));
+
+    if (isClaudeCodeSession && typeof systemText === "string") {
+      systemText += CLAUDE_CODE_HARNESS_ADAPTER_INSTRUCTION;
+    }
+
     if (systemText) {
       result.systemInstruction = {
         role: "system",

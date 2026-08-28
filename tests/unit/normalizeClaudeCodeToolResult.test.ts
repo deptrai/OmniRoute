@@ -161,3 +161,24 @@ test("claudeToOpenAIRequest injects Claude Code harness adapter instructions for
     "Expected harness adapter instructions in system prompt"
   );
 });
+
+test("claudeToGeminiRequest injects Claude Code harness adapter instructions for Claude Code sessions", () => {
+  const body = {
+    system: "You are Claude Code, Anthropic's official CLI for Claude.",
+    messages: [
+      {
+        role: "user",
+        content: "hello",
+      },
+    ],
+  };
+
+  const converted = claudeToGeminiRequest("gemini-2.5-flash", body, false);
+  const sysText = converted.systemInstruction?.parts?.[0]?.text;
+  assert.ok(sysText, "Expected systemInstruction text to exist");
+  assert.match(
+    sysText,
+    /Claude Code CLI Runtime Conventions/i,
+    "Expected harness adapter instructions in Gemini systemInstruction"
+  );
+});
