@@ -11,6 +11,7 @@ import { gunzipSync } from "node:zlib";
 
 import { PROVIDERS } from "../config/constants.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
+import { sanitizeOpenAITools } from "../services/toolSchemaSanitizer.ts";
 import { BaseExecutor, mergeUpstreamExtraHeaders, type ExecuteInput } from "./base.ts";
 
 const DEVIN_DESKTOP_BASE_URL = "https://server.codeium.com";
@@ -262,6 +263,28 @@ function convertHistoryToolCalls(
   return result;
 }
 
+function sanitizeDevinPrompt(text: string): string {
+  if (!text) return "";
+  let out = text;
+  out = out.replace(
+    /You are a Claude agent, built on Anthropic's Claude Agent SDK\./gi,
+    "You are an AI software engineering agent."
+  );
+  out = out.replace(
+    /IMPORTANT: Assist with authorized security testing[\s\S]*?defensive use cases\./gi,
+    ""
+  );
+  out = out.replace(
+    /Fast mode for Claude Code uses Claude Opus[\s\S]*?available on Opus 5\/4\.8\./gi,
+    ""
+  );
+  out = out.replace(
+    /.*Claude Code is available as a CLI in the terminal.*claude\.ai\/code.*\n?/gi,
+    ""
+  );
+  return out.trim();
+}
+
 function convertMessages(messages: OpenAIMessage[]): {
   systemPrompt: string;
   prompts: DevinDesktopPromptInput[];
@@ -270,7 +293,8 @@ function convertMessages(messages: OpenAIMessage[]): {
   const prompts: DevinDesktopPromptInput[] = [];
   for (const message of messages) {
     const role = String(message.role || "user");
-    const prompt = messageText(message.content);
+    const rawPrompt = messageText(message.content);
+    const prompt = sanitizeDevinPrompt(rawPrompt);
     if (role === "system" || role === "developer") {
       if (prompt) systemParts.push(prompt);
       continue;
@@ -297,16 +321,156 @@ type OpenAIFunctionTool = {
   };
 };
 
+const DEVIN_MAX_TOOL_DESC_LEN = 200;
+const DEVIN_MAX_TOOL_SCHEMA_LEN = 2500;
+const DEVIN_TOOLS_SIZE_BUDGET = 52000;
+const DEVIN_TIER2_THRESHOLD = 30000;
+const DEVIN_TIER3_THRESHOLD = 10000;
+const DEVIN_TIER2_DESC_LEN = 120;
+const DEVIN_TIER3_DESC_LEN = 60;
+
+function sanitizeJsonSchema(node: unknown): unknown {
+  if (node === null || typeof node !== "object") return node;
+  if (Array.isArray(node)) return node.map(sanitizeJsonSchema);
+  const obj = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  const KEEP = new Set([
+    "type",
+    "properties",
+    "required",
+    "enum",
+    "items",
+    "anyOf",
+    "oneOf",
+    "allOf",
+    "const",
+    "description",
+    "additionalProperties",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "format",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "multipleOf",
+  ]);
+  for (const [k, v] of Object.entries(obj)) {
+    if (!KEEP.has(k)) continue;
+    if (k === "description") {
+      const s = typeof v === "string" ? v : String(v);
+      out[k] = s.length > 80 ? s.slice(0, 80) + "…" : s;
+    } else if (k === "properties") {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        const props: Record<string, unknown> = {};
+        for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
+          props[pk] = sanitizeJsonSchema(pv);
+        }
+        out[k] = props;
+      }
+    } else {
+      out[k] = sanitizeJsonSchema(v);
+    }
+  }
+  return out;
+}
+
+const DEVIN_CRITICAL_BUILTINS = new Set([
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "Read",
+  "Bash",
+  "Glob",
+  "Grep",
+  "WebSearch",
+  "WebFetch",
+  "TodoWrite",
+  "NotebookEdit",
+  "LS",
+  "Skill",
+  "TaskCreate",
+  "TaskUpdate",
+  "TaskList",
+  "EnterWorktree",
+  "ExitWorktree",
+]);
+
 function convertTools(tools: unknown): DevinDesktopToolInput[] {
-  if (!Array.isArray(tools)) return [];
+  if (!Array.isArray(tools) || tools.length === 0) return [];
+  const allTools = sanitizeOpenAITools(tools) as OpenAIFunctionTool[];
   const result: DevinDesktopToolInput[] = [];
-  for (const tool of tools as OpenAIFunctionTool[]) {
-    if (tool?.type !== "function" || typeof tool.function?.name !== "string") continue;
+
+  const criticalBuiltinTools = allTools.filter(
+    (t) => typeof t?.function?.name === "string" && DEVIN_CRITICAL_BUILTINS.has(t.function.name)
+  );
+  const mcpTools = allTools.filter(
+    (t) =>
+      typeof t?.function?.name === "string" &&
+      t.function.name.startsWith("mcp__") &&
+      !DEVIN_CRITICAL_BUILTINS.has(t.function.name)
+  );
+  const otherBuiltinTools = allTools.filter(
+    (t) =>
+      typeof t?.function?.name === "string" &&
+      !t.function.name.startsWith("mcp__") &&
+      !DEVIN_CRITICAL_BUILTINS.has(t.function.name)
+  );
+  const orderedTools = [...criticalBuiltinTools, ...mcpTools, ...otherBuiltinTools];
+
+  let totalSize = 0;
+  for (const t of orderedTools) {
+    if (typeof t?.function?.name !== "string") continue;
+    const name = t.function.name;
+    const rawDesc = typeof t.function.description === "string" ? t.function.description : "";
+
+    const remaining = DEVIN_TOOLS_SIZE_BUDGET - totalSize;
+    let desc: string;
+    let schemaStr: string;
+
+    if (remaining > DEVIN_TIER2_THRESHOLD) {
+      desc =
+        rawDesc.length > DEVIN_MAX_TOOL_DESC_LEN
+          ? rawDesc.slice(0, DEVIN_MAX_TOOL_DESC_LEN) + "…"
+          : rawDesc;
+      try {
+        const sanitized = sanitizeJsonSchema(t.function.parameters);
+        schemaStr = t.function.parameters ? JSON.stringify(sanitized) : "{}";
+      } catch {
+        schemaStr = "{}";
+      }
+      if (schemaStr.length > DEVIN_MAX_TOOL_SCHEMA_LEN) {
+        schemaStr = '{"type":"object"}';
+      }
+    } else if (remaining > DEVIN_TIER3_THRESHOLD) {
+      desc =
+        rawDesc.length > DEVIN_TIER2_DESC_LEN
+          ? rawDesc.slice(0, DEVIN_TIER2_DESC_LEN) + "…"
+          : rawDesc;
+      schemaStr = '{"type":"object"}';
+    } else {
+      desc =
+        rawDesc.length > DEVIN_TIER3_DESC_LEN
+          ? rawDesc.slice(0, DEVIN_TIER3_DESC_LEN) + "…"
+          : rawDesc;
+      schemaStr = "{}";
+    }
+
+    const entrySize = desc.length + schemaStr.length + name.length;
+    if (totalSize + entrySize > DEVIN_TOOLS_SIZE_BUDGET) {
+      break;
+    }
+    totalSize += entrySize;
+
     result.push({
-      name: tool.function.name,
-      description: typeof tool.function.description === "string" ? tool.function.description : "",
-      jsonSchemaString: JSON.stringify(tool.function.parameters ?? {}),
-      strict: tool.function.strict === true,
+      name,
+      description: desc,
+      jsonSchemaString: schemaStr,
+      strict: t.function.strict === true,
     });
   }
   return result;
@@ -676,7 +840,7 @@ export class DevinDesktopExecutor extends BaseExecutor {
       };
     }
 
-    const protobuf = encodeDevinDesktopRequest({
+    const protoPayload = {
       apiKey,
       userJwt,
       model,
@@ -687,7 +851,8 @@ export class DevinDesktopExecutor extends BaseExecutor {
       tools: convertTools(requestBody.tools),
       disableParallelToolCalls: requestBody.parallel_tool_calls === false,
       toolChoice: convertToolChoice(requestBody.tool_choice),
-    });
+    };
+    const protobuf = encodeDevinDesktopRequest(protoPayload);
     const framed = encodeDevinConnectEnvelope(protobuf);
     log?.info?.("DEVIN", `Devin Desktop → ${model} (${converted.prompts.length} messages)`);
 
