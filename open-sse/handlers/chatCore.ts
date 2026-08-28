@@ -2099,10 +2099,13 @@ export async function handleChatCore({
   );
   if (outputBudget.ok === false) {
     const exceededInputCap = outputBudget.maxInputTokens !== undefined;
-    const message =
-      `Input exceeds ${exceededInputCap ? "maximum input tokens" : "context window"} for ${provider}/${effectiveModel}: ` +
-      `estimated ${outputBudget.estimatedInputTokens} input tokens, ${exceededInputCap ? `max input ${outputBudget.maxInputTokens}` : `limit ${outputBudget.contextLimit}`}. ` +
-      `Reduce the prompt or route to a model with a larger ${exceededInputCap ? "input limit" : "context window"}.`;
+    const limitTokens = exceededInputCap ? outputBudget.maxInputTokens : outputBudget.contextLimit;
+    const isClaudeClient = sourceFormat === FORMATS.CLAUDE;
+    const message = isClaudeClient
+      ? `Prompt is too long: ${outputBudget.estimatedInputTokens} tokens > ${limitTokens} maximum context length for ${provider}/${effectiveModel}. Reduce the prompt or route to a model with a larger context window.`
+      : `Input exceeds ${exceededInputCap ? "maximum input tokens" : "context window"} for ${provider}/${effectiveModel}: ` +
+        `estimated ${outputBudget.estimatedInputTokens} input tokens, ${exceededInputCap ? `max input ${outputBudget.maxInputTokens}` : `limit ${outputBudget.contextLimit}`}. ` +
+        `Reduce the prompt or route to a model with a larger ${exceededInputCap ? "input limit" : "context window"}.`;
     log?.warn?.("CONTEXT", message);
     trackPendingRequest(model, provider, connectionId, false);
     return createErrorResult(
@@ -4225,79 +4228,84 @@ export async function handleChatCore({
                 `[provider] Node ${errorConnectionId} probe ${errorType} (${statusCode}) — connection stays active`
               );
             } else {
-            // Kimi's 403 says "billing cycle" for both an exhausted subscription and a
-            // temporary request window. Read its official usage endpoint before making
-            // the connection terminal: a non-zero Weekly quota plus an empty Ratelimit
-            // window must recover automatically at the reported reset time.
-            let kimiRateLimitResetAt: string | null = null;
-            if (provider === "kimi-coding") {
-              try {
-                const { fetchAndPersistProviderLimits } =
-                  await import("@/lib/usage/providerLimits");
-                const { usage } = await fetchAndPersistProviderLimits(errorConnectionId, "manual");
-                kimiRateLimitResetAt = getKimiTemporaryRateLimitResetAt(usage);
-              } catch {
-                // Preserve the existing quota handling when Kimi's usage endpoint is unavailable.
+              // Kimi's 403 says "billing cycle" for both an exhausted subscription and a
+              // temporary request window. Read its official usage endpoint before making
+              // the connection terminal: a non-zero Weekly quota plus an empty Ratelimit
+              // window must recover automatically at the reported reset time.
+              let kimiRateLimitResetAt: string | null = null;
+              if (provider === "kimi-coding") {
+                try {
+                  const { fetchAndPersistProviderLimits } =
+                    await import("@/lib/usage/providerLimits");
+                  const { usage } = await fetchAndPersistProviderLimits(
+                    errorConnectionId,
+                    "manual"
+                  );
+                  kimiRateLimitResetAt = getKimiTemporaryRateLimitResetAt(usage);
+                } catch {
+                  // Preserve the existing quota handling when Kimi's usage endpoint is unavailable.
+                }
               }
-            }
 
-            // Providers with per-model quotas — lock the model only, not the connection
-            const quotaCooldownMs = kimiRateLimitResetAt
-              ? Math.max(new Date(kimiRateLimitResetAt).getTime() - Date.now(), 0)
-              : retryAfterMs || COOLDOWN_MS.rateLimit;
-            const accountSemaphoreKey = resolveAccountSemaphoreKey({
-              provider,
-              model: currentModel,
-              connectionId: errorConnectionId,
-              credentials,
-            });
-            if (accountSemaphoreKey) {
-              markAccountSemaphoreBlocked(accountSemaphoreKey, quotaCooldownMs);
-            }
-            if (kimiRateLimitResetAt) {
-              await updateProviderConnection(errorConnectionId, {
-                testStatus: "unavailable",
-                rateLimitedUntil: kimiRateLimitResetAt,
-                backoffLevel: 0,
-                lastErrorType: PROVIDER_ERROR_TYPES.RATE_LIMITED,
-                lastError: message,
-                errorCode: statusCode,
-              });
-              console.warn(
-                `[provider] Node ${errorConnectionId} Kimi request window exhausted (${statusCode}) — retrying after ${kimiRateLimitResetAt}`
-              );
-            } else if (isModelScope() && errorConnectionId) {
-              const lockFn = provider === "antigravity" ? lockExactModel : lockModel;
-              lockFn(provider, errorConnectionId, model, "quota_exhausted", quotaCooldownMs);
-              console.warn(
-                `[provider] Node ${errorConnectionId} ModelScope model quota exhausted (${statusCode}) for ${model} - ${Math.ceil(quotaCooldownMs / 1000)}s (connection stays active)`
-              );
-            } else if (
-              lockModelIfPerModelQuota(
+              // Providers with per-model quotas — lock the model only, not the connection
+              const quotaCooldownMs = kimiRateLimitResetAt
+                ? Math.max(new Date(kimiRateLimitResetAt).getTime() - Date.now(), 0)
+                : retryAfterMs || COOLDOWN_MS.rateLimit;
+              const accountSemaphoreKey = resolveAccountSemaphoreKey({
                 provider,
-                errorConnectionId,
-                model,
-                "quota_exhausted",
-                quotaCooldownMs
-              )
-            ) {
-              const quotaScope = getQuotaScopeLabelForProvider(provider, model);
-              console.warn(
-                `[provider] Node ${errorConnectionId} ${quotaScope}-only quota exhausted (${statusCode}) for ${model} - ${Math.ceil(quotaCooldownMs / 1000)}s (cooldown_scope=${quotaScope}, ttl_source=${retryAfterMs ? "upstream" : "inferred"}, connection stays active)`
-              );
-            } else {
-              await writeTerminalStatus(
-                errorConnectionId,
-                {
-                  testStatus: "credits_exhausted",
+                model: currentModel,
+                connectionId: errorConnectionId,
+                credentials,
+              });
+              if (accountSemaphoreKey) {
+                markAccountSemaphoreBlocked(accountSemaphoreKey, quotaCooldownMs);
+              }
+              if (kimiRateLimitResetAt) {
+                await updateProviderConnection(errorConnectionId, {
+                  testStatus: "unavailable",
+                  rateLimitedUntil: kimiRateLimitResetAt,
+                  backoffLevel: 0,
+                  lastErrorType: PROVIDER_ERROR_TYPES.RATE_LIMITED,
                   lastError: message,
-                  lastErrorType: errorType,
-                  errorCode: String(statusCode),
-                },
-                "production"
-              );
-              console.warn(`[provider] Node ${errorConnectionId} exhausted quota (${statusCode})`);
-            }
+                  errorCode: statusCode,
+                });
+                console.warn(
+                  `[provider] Node ${errorConnectionId} Kimi request window exhausted (${statusCode}) — retrying after ${kimiRateLimitResetAt}`
+                );
+              } else if (isModelScope() && errorConnectionId) {
+                const lockFn = provider === "antigravity" ? lockExactModel : lockModel;
+                lockFn(provider, errorConnectionId, model, "quota_exhausted", quotaCooldownMs);
+                console.warn(
+                  `[provider] Node ${errorConnectionId} ModelScope model quota exhausted (${statusCode}) for ${model} - ${Math.ceil(quotaCooldownMs / 1000)}s (connection stays active)`
+                );
+              } else if (
+                lockModelIfPerModelQuota(
+                  provider,
+                  errorConnectionId,
+                  model,
+                  "quota_exhausted",
+                  quotaCooldownMs
+                )
+              ) {
+                const quotaScope = getQuotaScopeLabelForProvider(provider, model);
+                console.warn(
+                  `[provider] Node ${errorConnectionId} ${quotaScope}-only quota exhausted (${statusCode}) for ${model} - ${Math.ceil(quotaCooldownMs / 1000)}s (cooldown_scope=${quotaScope}, ttl_source=${retryAfterMs ? "upstream" : "inferred"}, connection stays active)`
+                );
+              } else {
+                await writeTerminalStatus(
+                  errorConnectionId,
+                  {
+                    testStatus: "credits_exhausted",
+                    lastError: message,
+                    lastErrorType: errorType,
+                    errorCode: String(statusCode),
+                  },
+                  "production"
+                );
+                console.warn(
+                  `[provider] Node ${errorConnectionId} exhausted quota (${statusCode})`
+                );
+              }
             } // close probeIsolated3 else
           }
         } else if (errorType === PROVIDER_ERROR_TYPES.UNAUTHORIZED) {
