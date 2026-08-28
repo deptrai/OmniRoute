@@ -267,7 +267,15 @@ function sanitizeDevinPrompt(text: string): string {
   if (!text) return "";
   let out = text;
   out = out.replace(
-    /You are a Claude agent, built on Anthropic's Claude Agent SDK\./gi,
+    /You are Claude Code, Anthropic's official CLI for Claude\.?/gi,
+    "You are an AI software engineering agent."
+  );
+  out = out.replace(
+    /You are a Claude agent, built on Anthropic's Claude Agent SDK\.?/gi,
+    "You are an AI software engineering agent."
+  );
+  out = out.replace(
+    /You are Claude[^.\n]*Anthropic[^.\n]*\./gi,
     "You are an AI software engineering agent."
   );
   out = out.replace(
