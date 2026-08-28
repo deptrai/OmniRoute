@@ -1,0 +1,11 @@
+{
+  "project": {
+    "name": "omniroute",
+    "root": "/Users/luisphan/Documents/GitHub/OmniRoute"
+  },
+  "settings": {
+    "semanticSearch": {
+      "enabled": false
+    }
+  }
+}
