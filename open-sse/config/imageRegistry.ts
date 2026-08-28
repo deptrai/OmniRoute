@@ -389,6 +389,7 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
 
   antigravity: {
     id: "antigravity",
+    alias: "agy",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
     authType: "oauth",
     authHeader: "bearer",
@@ -925,7 +926,10 @@ export function parseImageModel(modelStr) {
 
   // No provider prefix — try to find the model in every provider, excluding cookie-auth (web) bridges
   for (const [providerId, config] of Object.entries(IMAGE_PROVIDERS)) {
-    if (config.authHeader !== "cookie" && (config.routingAliases?.includes(modelStr) || config.models.some((m) => m.id === modelStr))) {
+    if (
+      config.authHeader !== "cookie" &&
+      (config.routingAliases?.includes(modelStr) || config.models.some((m) => m.id === modelStr))
+    ) {
       return { provider: providerId, model: modelStr };
     }
   }
