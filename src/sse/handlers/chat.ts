@@ -50,7 +50,7 @@ import { createHookContext, runHooks, initPreRequestRegistry } from "@/lib/middl
 import { deleteHandoff, getHandoff } from "@/lib/db/contextHandoffs";
 import { getCombos, getCombosCacheVersion, updateCombo } from "@/lib/db/combos";
 import { promoteSuccessfulComboModel } from "@/lib/combos/autoPromote";
-import { getCachedSettings } from "@/lib/db/databaseSettings";
+import { getCachedSettings } from "@/lib/db/readCache";
 import {
   deleteSessionAccountAffinity,
   getSessionAccountAffinity,
