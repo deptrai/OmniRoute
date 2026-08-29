@@ -101,18 +101,126 @@ function sanitizeTaskUpdateArgs(args: Record<string, unknown>): void {
 // Both missing-field cases cause InputValidationError and a wasted retry.
 // Fix: ensure BOTH fields exist by copying whichever is missing from the other.
 function sanitizeAgentArgs(args: Record<string, unknown>): void {
+  // Remap non-standard fields from models: summary -> description, message -> prompt
+  if (!("description" in args) && typeof args.summary === "string") {
+    args.description = args.summary;
+  }
+  if (!("prompt" in args) && typeof args.message === "string") {
+    args.prompt = args.message;
+  }
+  delete args.summary;
+  delete args.message;
+  delete args.type;
+
   const hasPrompt = typeof args.prompt === "string" && args.prompt !== "";
   const hasDescription = typeof args.description === "string" && args.description !== "";
 
   if (!hasPrompt && hasDescription) {
-    // GLM emitted only description — copy to prompt
     args.prompt = args.description;
   } else if (!hasDescription && hasPrompt) {
-    // GLM emitted only prompt — copy to description (truncate to ~80 chars for summary)
     const promptStr = args.prompt as string;
     args.description = promptStr.length > 80 ? promptStr.slice(0, 77) + "..." : promptStr;
   }
-  // If both present or both absent, leave as-is.
+}
+
+function sanitizeAskUserQuestionArgs(args: Record<string, unknown>): void {
+  const normalizeOption = (opt: unknown): Record<string, unknown> => {
+    if (typeof opt === "string") {
+      return { label: opt, description: "" };
+    }
+    if (typeof opt === "object" && opt !== null && !Array.isArray(opt)) {
+      const o = opt as Record<string, unknown>;
+      const label =
+        typeof o.label === "string"
+          ? o.label
+          : typeof o.text === "string"
+            ? o.text
+            : typeof o.value === "string"
+              ? o.value
+              : typeof o.name === "string"
+                ? o.name
+                : JSON.stringify(o);
+      const description = typeof o.description === "string" ? o.description : "";
+      return {
+        ...o,
+        label,
+        description,
+      };
+    }
+    return { label: String(opt ?? ""), description: "" };
+  };
+
+  const normalizeQuestionObj = (q: unknown): Record<string, unknown> => {
+    if (typeof q === "string") {
+      return {
+        header: "Question",
+        question: q,
+        options: [],
+      };
+    }
+    if (typeof q === "object" && q !== null && !Array.isArray(q)) {
+      const rec = { ...(q as Record<string, unknown>) };
+      if (!rec.header || typeof rec.header !== "string") {
+        rec.header = typeof rec.title === "string" && rec.title ? rec.title : "Question";
+      }
+      if (!rec.question || typeof rec.question !== "string") {
+        rec.question =
+          typeof rec.text === "string"
+            ? rec.text
+            : typeof rec.prompt === "string"
+              ? rec.prompt
+              : typeof rec.description === "string"
+                ? rec.description
+                : "";
+      }
+      if (Array.isArray(rec.options)) {
+        rec.options = rec.options.map(normalizeOption);
+      } else {
+        rec.options = [];
+      }
+      return rec;
+    }
+    return { header: "Question", question: String(q ?? ""), options: [] };
+  };
+
+  const extractedQuestions: Record<string, unknown>[] = [];
+
+  if (Array.isArray(args.questions)) {
+    for (const item of args.questions) {
+      extractedQuestions.push(normalizeQuestionObj(item));
+    }
+  } else if (args.questions && typeof args.questions === "object") {
+    extractedQuestions.push(normalizeQuestionObj(args.questions));
+  }
+
+  const hasRootQuestion =
+    typeof args.question === "string" ||
+    (typeof args.question === "object" && args.question !== null) ||
+    Array.isArray(args.options);
+
+  if (hasRootQuestion) {
+    const rawQuestion = args.question;
+    const rawHeader = typeof args.header === "string" ? args.header : "Question";
+    const rawOptions = Array.isArray(args.options) ? args.options : [];
+
+    const rootQ =
+      typeof rawQuestion === "object" && rawQuestion !== null
+        ? normalizeQuestionObj(rawQuestion)
+        : normalizeQuestionObj({
+            header: rawHeader,
+            question: rawQuestion,
+            options: rawOptions,
+          });
+
+    extractedQuestions.push(rootQ);
+    delete args.question;
+    delete args.options;
+    delete args.header;
+  }
+
+  if (extractedQuestions.length > 0) {
+    args.questions = extractedQuestions;
+  }
 }
 
 const TOOL_SHIMS: Record<string, ShimFn> = {
@@ -142,13 +250,24 @@ const TOOL_SHIMS: Record<string, ShimFn> = {
     sanitizeTaskUpdateArgs(patched);
     return patched;
   },
-  // Claude Code Agent tool: GLM-5.2-max inconsistently emits only `description`
-  // OR only `prompt` — but Agent tool requires BOTH. Shim ensures both exist by
-  // copying whichever is missing from the other.
+  // Claude Code Agent tool: ensures both description and prompt exist, remapping non-standard fields.
   Agent: (input) => {
     if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
     const patched = { ...(input as Record<string, unknown>) };
     sanitizeAgentArgs(patched);
+    return patched;
+  },
+  // Claude Code AskUserQuestion tool: normalizes root question/options to questions array with object options.
+  AskUserQuestion: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeAskUserQuestionArgs(patched);
+    return patched;
+  },
+  ask_user_question: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeAskUserQuestionArgs(patched);
     return patched;
   },
   submit_pr_review: (input) => {

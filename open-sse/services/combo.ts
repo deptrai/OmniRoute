@@ -2429,6 +2429,26 @@ export async function handleComboChat({
             !isWindsurfInvalidArg &&
             [408, 429, 500, 502, 503, 504].includes(result.status);
           if (retry < maxRetries && isTransient && !providerExhausted) {
+            if (
+              target.connectionId &&
+              provider &&
+              rawModel &&
+              isModelLocked(provider, targetWithConnection.connectionId || "", rawModel)
+            ) {
+              log.info("COMBO", `Skipping retry for ${modelStr} — model lockout active`);
+              // Live incident (log id 1784457764961-73): earliestRetryAfter is already
+              // captured above from THIS dispatch's own response, but lastStatus was
+              // never recorded on this bail-out path — so once every target in the set
+              // hit an existing lockout, lastStatus stayed null and the final `if
+              // (!lastStatus)` check crystallized an immediate ALL_ACCOUNTS_INACTIVE 503
+              // instead of ever reaching the `if (earliestRetryAfter)` cooldown-wait
+              // decision below, even though a real 429 with a short (~1min) retry-after
+              // was just observed. Recording it here mirrors the "done retrying" path.
+              lastError = errorText || String(result.status);
+              lastStatus = result.status;
+              if (i > 0) fallbackCount++;
+              return null;
+            }
             // Record model lockout immediately on the first transient failure —
             // once the model is cooling down, retrying it would waste an upstream
             // call and extend the cooldown via exponential backoff.
@@ -2454,12 +2474,16 @@ export async function handleComboChat({
                 lockoutRecorded = true;
               }
             }
-            if (lockoutRecorded) {
+            if (lockoutRecorded && target.connectionId) {
               log.info("COMBO", `Skipping retry for ${modelStr} — model lockout active`);
+              // Same fix as the already-locked branch above — this is the
+              // first-failure lockout path, so lastStatus needs recording here too.
+              lastError = errorText || String(result.status);
+              lastStatus = result.status;
               if (i > 0) fallbackCount++;
               return null;
             }
-            continue; // Retry same model (transient error, no lockout recorded)
+            continue; // Retry same model (transient error, or unpinned pool target trying next account)
           }
 
           // Done retrying this model

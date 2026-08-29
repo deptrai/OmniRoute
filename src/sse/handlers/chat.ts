@@ -277,6 +277,9 @@ export async function handleChat(
   // resolveRoutingModel). The resolved model still passes through
   // enforceApiKeyPolicy below, so it cannot bypass per-key allowlists.
   let modelStr = resolveRoutingModel(request, body);
+  if (modelStr && body?.model !== modelStr) {
+    body = { ...body, model: modelStr };
+  }
 
   // Count messages (support both messages[] and input[] formats)
   const msgCount = body.messages?.length || body.input?.length || 0;

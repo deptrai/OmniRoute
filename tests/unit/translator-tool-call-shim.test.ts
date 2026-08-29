@@ -521,6 +521,48 @@ test("applyToolCallShimToBuffer: Agent with valid JSON, repairedRaw ignored (raw
   assert.equal(out.description, "short");
 });
 
+test("applyToolCallShimToBuffer: Agent remaps summary -> description and message -> prompt", () => {
+  const raw =
+    '{"summary": "Analyze performance", "message": "Check memory leaks", "type": "research"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", raw));
+  assert.equal(out.description, "Analyze performance");
+  assert.equal(out.prompt, "Check memory leaks");
+  assert.equal("summary" in out, false);
+  assert.equal("message" in out, false);
+  assert.equal("type" in out, false);
+});
+
+test("applyToolCallShimToBuffer: AskUserQuestion normalizes flat question and string options", () => {
+  const raw = JSON.stringify({
+    question: "Do you want to proceed?",
+    header: "Confirmation",
+    options: ["Yes", "No"],
+  });
+  const out = JSON.parse(applyToolCallShimToBuffer("AskUserQuestion", raw));
+  assert.equal(Array.isArray(out.questions), true);
+  assert.equal(out.questions.length, 1);
+  assert.equal(out.questions[0].header, "Confirmation");
+  assert.equal(out.questions[0].question, "Do you want to proceed?");
+  assert.deepEqual(out.questions[0].options, [
+    { label: "Yes", description: "" },
+    { label: "No", description: "" },
+  ]);
+  assert.equal("question" in out, false);
+  assert.equal("options" in out, false);
+});
+
+test("applyToolCallShimToBuffer: AskUserQuestion handles null question gracefully", () => {
+  const raw = JSON.stringify({
+    questions: [
+      { header: "Step 1", question: "Continue?", options: [{ label: "OK", description: "" }] },
+    ],
+    question: null,
+  });
+  const out = JSON.parse(applyToolCallShimToBuffer("AskUserQuestion", raw));
+  assert.equal(out.questions.length, 1);
+  assert.equal(out.questions[0].header, "Step 1");
+});
+
 // -------- Streaming integration tests --------
 
 function freshState() {

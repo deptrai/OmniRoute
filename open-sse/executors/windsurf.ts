@@ -341,11 +341,53 @@ function buildChatToolCall(tc: WsToolCall): Uint8Array {
   ]);
 }
 
+function sanitizeWindsurfPrompt(text: string): string {
+  if (!text || typeof text !== "string") return typeof text === "string" ? text : "";
+  let out = text;
+  out = out.replace(
+    /You are Claude Code, Anthropic's official CLI for Claude\.?/gi,
+    "You are an AI software engineering agent."
+  );
+  out = out.replace(
+    /You are (?:a|an) (?:Claude )?agent(?: for Claude Code)?, built on Anthropic's Claude Agent SDK\.?/gi,
+    "You are an AI software engineering agent."
+  );
+  out = out.replace(
+    /You are an agent for Claude Code, Anthropic's official CLI for Claude\.?/gi,
+    "You are an AI software engineering agent."
+  );
+  out = out.replace(
+    /You are Claude[^.\n]*Anthropic[^.\n]*\./gi,
+    "You are an AI software engineering agent."
+  );
+  out = out.replace(
+    /For clear communication with the user\s+(?:the\s+)?assistant\s+MUST\s+avoid\s+using\s+emojis\.?/gi,
+    "Avoid using emojis."
+  );
+  out = out.replace(
+    /(?:the\s+)?assistant\s+MUST\s+avoid\s+using\s+emojis\.?/gi,
+    "Avoid using emojis."
+  );
+  out = out.replace(
+    /IMPORTANT: Assist with authorized security testing[\s\S]*?defensive use cases\./gi,
+    ""
+  );
+  out = out.replace(
+    /Fast mode for Claude Code uses Claude Opus[\s\S]*?available on Opus 5\/4\.8\./gi,
+    ""
+  );
+  out = out.replace(
+    /.*Claude Code is available as a CLI in the terminal.*claude\.ai\/code.*\n?/gi,
+    ""
+  );
+  return out;
+}
+
 function buildChatMessagePrompt(msg: WsChatMessage): Uint8Array {
   const parts: Uint8Array[] = [
     encodeString(1, randomUUID()), // message_id
     encodeVarintField(2, roleToSource(msg.role)), // source enum
-    encodeString(3, msg.content), // prompt (text content)
+    encodeString(3, sanitizeWindsurfPrompt(msg.content)), // prompt (text content)
   ];
   // field 6: repeated ChatToolCall tool_calls (assistant messages with tool calls)
   if (msg.toolCalls) {
@@ -409,7 +451,7 @@ export function buildGetChatMessageRequest(
   // Extract the latest user message as the prompt (field 2).
   // All messages (including the latest) go into chat_message_prompts (field 3).
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-  const prompt = lastUserMsg?.content ?? "";
+  const prompt = sanitizeWindsurfPrompt(lastUserMsg?.content ?? "");
 
   const parts: Uint8Array[] = [
     encodeMessage(1, buildMetadata(apiKey, sessionId)), // metadata

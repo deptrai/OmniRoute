@@ -1,5 +1,6 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
+import { hasToolCallShim, applyToolCallShimToBuffer } from "../helpers/toolCallShim.ts";
 
 /**
  * Direct Gemini → Claude response translator.
@@ -96,7 +97,10 @@ export function geminiToClaudeResponse(chunk, state) {
           },
         });
 
-        const argsStr = JSON.stringify(fc.args || {});
+        let argsStr = JSON.stringify(fc.args || {});
+        if (hasToolCallShim(restoredToolName)) {
+          argsStr = applyToolCallShimToBuffer(restoredToolName, argsStr);
+        }
         results.push({
           type: "content_block_delta",
           index: idx,
