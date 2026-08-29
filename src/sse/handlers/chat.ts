@@ -48,9 +48,9 @@ import * as log from "../utils/logger";
 import { checkAndRefreshToken } from "../services/tokenRefresh";
 import { createHookContext, runHooks, initPreRequestRegistry } from "@/lib/middleware/registry";
 import { deleteHandoff, getHandoff } from "@/lib/db/contextHandoffs";
-import { getCombos, getCombosCacheVersion, updateCombo } from "@/lib/db/combos";
+import { getCombos, updateCombo } from "@/lib/db/combos";
 import { promoteSuccessfulComboModel } from "@/lib/combos/autoPromote";
-import { getCachedSettings } from "@/lib/db/readCache";
+import { getCachedSettings, getCombosCacheVersion } from "@/lib/db/readCache";
 import {
   deleteSessionAccountAffinity,
   getSessionAccountAffinity,
