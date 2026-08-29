@@ -2167,10 +2167,13 @@ export async function handleChatCore({
   );
   if (outputBudget.ok === false) {
     const exceededInputCap = outputBudget.maxInputTokens !== undefined;
-    const message =
-      `Input exceeds ${exceededInputCap ? "maximum input tokens" : "context window"} for ${provider}/${effectiveModel}: ` +
-      `estimated ${outputBudget.estimatedInputTokens} input tokens, ${exceededInputCap ? `max input ${outputBudget.maxInputTokens}` : `limit ${outputBudget.contextLimit}`}. ` +
-      `Reduce the prompt or route to a model with a larger ${exceededInputCap ? "input limit" : "context window"}.`;
+    const limitTokens = exceededInputCap ? outputBudget.maxInputTokens : outputBudget.contextLimit;
+    const isClaudeClient = sourceFormat === FORMATS.CLAUDE;
+    const message = isClaudeClient
+      ? `Prompt is too long: ${outputBudget.estimatedInputTokens} tokens > ${limitTokens} maximum context length for ${provider}/${effectiveModel}. Reduce the prompt or route to a model with a larger context window.`
+      : `Input exceeds ${exceededInputCap ? "maximum input tokens" : "context window"} for ${provider}/${effectiveModel}: ` +
+        `estimated ${outputBudget.estimatedInputTokens} input tokens, ${exceededInputCap ? `max input ${outputBudget.maxInputTokens}` : `limit ${outputBudget.contextLimit}`}. ` +
+        `Reduce the prompt or route to a model with a larger ${exceededInputCap ? "input limit" : "context window"}.`;
     log?.warn?.("CONTEXT", message);
     trackPendingRequest(model, provider, connectionId, false);
     return createErrorResult(
