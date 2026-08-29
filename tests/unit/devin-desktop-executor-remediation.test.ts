@@ -528,3 +528,56 @@ test("Devin Desktop sanitizes auth failures and never issues chat", async () => 
     await mock.close();
   }
 });
+
+test("Devin Desktop sanitizes Claude Code subagent prompt fingerprints", async () => {
+  let capturedPayload: Uint8Array | null = null;
+  const mock = await listen((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (c) => chunks.push(c));
+    request.on("end", () => {
+      if (request.url === "/exa.auth_pb.AuthService/GetUserJwt") {
+        response.writeHead(200, { "Content-Type": "application/proto" });
+        response.end(stringField(1, "jwt-value"));
+        return;
+      }
+      // Strip 5-byte connect envelope
+      capturedPayload = Buffer.concat(chunks).subarray(5);
+      response.writeHead(200, { "Content-Type": "application/connect+proto" });
+      response.end();
+    });
+  });
+
+  try {
+    await new DevinDesktopExecutor().execute({
+      model: "swe-1-7",
+      body: {
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are an agent for Claude Code, Anthropic's official CLI for Claude.\n" +
+              "For clear communication with the user the assistant MUST avoid using emojis.",
+          },
+          { role: "user", content: "hello" },
+        ],
+      },
+      stream: true,
+      credentials: {
+        accessToken: "test-token",
+        providerSpecificData: { baseUrl: mock.origin },
+      },
+    });
+
+    assert.ok(capturedPayload);
+    const text = new TextDecoder().decode(capturedPayload);
+    assert.doesNotMatch(text, /Anthropic's official CLI for Claude/);
+    assert.doesNotMatch(
+      text,
+      /For clear communication with the user the assistant MUST avoid using emojis/
+    );
+    assert.match(text, /You are an AI software engineering agent/);
+    assert.match(text, /Avoid using emojis/);
+  } finally {
+    await mock.close();
+  }
+});

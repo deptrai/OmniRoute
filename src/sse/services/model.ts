@@ -536,6 +536,15 @@ export async function getCombo(modelStr) {
     }
   }
 
+  // Fallback: Strip [1m] extended-context suffix if present (e.g. claude-sonnet-5[1m] -> claude-sonnet-5)
+  if (typeof modelStr === "string" && modelStr.endsWith("[1m]")) {
+    const withoutSuffix = modelStr.slice(0, -4);
+    combo = await getCombo(withoutSuffix);
+    if (combo && Array.isArray(combo.models) && combo.models.length > 0) {
+      return combo;
+    }
+  }
+
   // #4446: the opencode-plugin publishes combos as ModelV2 `id: combo.id`, and
   // the OpenCode `--model` dispatch path forwards a lowercased bare slug. The
   // exact, case-sensitive name match above misses both a combo addressed by its

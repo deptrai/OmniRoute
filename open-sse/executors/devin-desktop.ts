@@ -275,8 +275,24 @@ function sanitizeDevinPrompt(text: string): string {
     "You are an AI software engineering agent."
   );
   out = out.replace(
+    /You are (?:a|an) (?:Claude )?agent(?: for Claude Code)?, built on Anthropic's Claude Agent SDK\.?/gi,
+    "You are an AI software engineering agent."
+  );
+  out = out.replace(
+    /You are an agent for Claude Code, Anthropic's official CLI for Claude\.?/gi,
+    "You are an AI software engineering agent."
+  );
+  out = out.replace(
     /You are Claude[^.\n]*Anthropic[^.\n]*\./gi,
     "You are an AI software engineering agent."
+  );
+  out = out.replace(
+    /For clear communication with the user\s+(?:the\s+)?assistant\s+MUST\s+avoid\s+using\s+emojis\.?/gi,
+    "Avoid using emojis."
+  );
+  out = out.replace(
+    /(?:the\s+)?assistant\s+MUST\s+avoid\s+using\s+emojis\.?/gi,
+    "Avoid using emojis."
   );
   out = out.replace(
     /IMPORTANT: Assist with authorized security testing[\s\S]*?defensive use cases\./gi,

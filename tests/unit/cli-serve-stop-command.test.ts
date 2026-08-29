@@ -6,6 +6,7 @@ import path from "node:path";
 
 const ORIGINAL_DATA_DIR = process.env.DATA_DIR;
 const ORIGINAL_FETCH = globalThis.fetch;
+const ORIGINAL_KILL = process.kill;
 
 function createTempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-cli-stop-"));
@@ -20,10 +21,12 @@ async function withEnv(fn: (dataDir: string) => Promise<void>) {
 
   const originalLog = console.log;
   console.log = () => {};
+  process.kill = (() => true) as typeof process.kill;
 
   try {
     await fn(dataDir);
   } finally {
+    process.kill = ORIGINAL_KILL;
     console.log = originalLog;
     globalThis.fetch = ORIGINAL_FETCH;
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -36,18 +39,19 @@ async function withEnv(fn: (dataDir: string) => Promise<void>) {
 test("stop returns 0 when no server is running (no PID file)", async () => {
   await withEnv(async () => {
     const { runStopCommand } = await import("../../bin/cli/commands/stop.mjs");
-    const result = await runStopCommand({});
+    const result = await runStopCommand({ port: 59128 });
     assert.equal(result, 0);
   });
 });
 
 test("stop returns 0 when PID file exists but process is gone", async (t) => {
   await withEnv(async (dataDir) => {
-    const pidPath = path.join(dataDir, "server.pid");
+    fs.mkdirSync(path.join(dataDir, "server"), { recursive: true });
+    const pidPath = path.join(dataDir, "server", ".pid");
     fs.writeFileSync(pidPath, "999999999", "utf8");
 
     const { runStopCommand } = await import("../../bin/cli/commands/stop.mjs");
-    const result = await runStopCommand({});
+    const result = await runStopCommand({ port: 59128 });
     assert.equal(result, 0);
   });
 });

@@ -54,6 +54,36 @@ type ClaudeRequestBody = {
   [key: string]: unknown;
 };
 
+// Normalizes Claude Code CLI's client-side anti-redundancy / short-circuit tool_result
+// messages so non-Anthropic models (SWE 1.7 Max, Gemini, DeepSeek, Qwen, etc.) understand
+// that the file content is already available in conversation context instead of
+// misinterpreting it as a tool failure and entering an infinite retry loop.
+// Matches all known Claude Code file-unchanged sentinel strings:
+//   - "Wasted call — file unchanged since your last Read. ..."
+//   - "File unchanged since last read. The content from the earlier Read ..."
+//   - "<system-reminder>This file is already in your context ..."
+const CLAUDE_CODE_UNCHANGED_NOTICE =
+  `[Notice: The content of this file has already been retrieved earlier in this conversation ` +
+  `and is unchanged on disk. Do NOT call Read on this file again. ` +
+  `Use the previously retrieved file content from your conversation history ` +
+  `and proceed directly with your task.]`;
+
+export function normalizeClaudeCodeToolResult(content: string): string {
+  if (typeof content !== "string" || !content) return content;
+  const trimmed = content.trim();
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.startsWith("wasted call") ||
+    lower.startsWith("file unchanged since last read") ||
+    lower.startsWith("<system-reminder>this file is already in your context") ||
+    lower.includes("file unchanged since your last read") ||
+    lower.includes("this file is already in your context")
+  ) {
+    return CLAUDE_CODE_UNCHANGED_NOTICE;
+  }
+  return content;
+}
+
 type KimiThinkingInput = {
   reasoning_effort?: unknown;
   thinking?: { effort?: unknown; type?: unknown } | null;

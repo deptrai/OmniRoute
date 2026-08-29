@@ -197,7 +197,7 @@ test("#9708: simulate first 503 then success on the same account; second failure
     { status: 507, error: "exceeded request buffer limit while retrying upstream" },
   ]);
   assert.equal(rotated.outcome, "fallback");
-  assert.equal(rotated.attempt, 1);
+  assert.equal(rotated.attempt, SAME_ACCOUNT_TRANSPORT_RETRY_MAX);
   assert.equal(rotated.markUnavailable, 1);
   assert.equal(rotated.connectionId, "acct-b");
 });

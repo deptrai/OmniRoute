@@ -1,12 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { applyToolCallShimToBuffer, hasToolCallShim, __test } = await import(
-  "../../open-sse/translator/helpers/toolCallShim.ts"
-);
-const { openaiToClaudeResponse } = await import(
-  "../../open-sse/translator/response/openai-to-claude.ts"
-);
+const { applyToolCallShimToBuffer, hasToolCallShim, __test } =
+  await import("../../open-sse/translator/helpers/toolCallShim.ts");
+const { openaiToClaudeResponse } =
+  await import("../../open-sse/translator/response/openai-to-claude.ts");
 
 const { coerceToArray } = __test as { coerceToArray: (v: unknown) => unknown[] };
 
@@ -14,6 +12,8 @@ const { coerceToArray } = __test as { coerceToArray: (v: unknown) => unknown[] }
 
 test("hasToolCallShim: returns true for registered shims", () => {
   assert.equal(hasToolCallShim("Read"), true);
+  assert.equal(hasToolCallShim("Skill"), true);
+  assert.equal(hasToolCallShim("TaskUpdate"), true);
   assert.equal(hasToolCallShim("submit_pr_review"), true);
   assert.equal(hasToolCallShim("some_other_tool"), false);
   assert.equal(hasToolCallShim(""), false);
@@ -120,30 +120,21 @@ test("applyToolCallShimToBuffer: Read coerces numeric-string limit/offset", () =
 
 test("applyToolCallShimToBuffer: Read strips pages for non-PDF files", () => {
   const out = JSON.parse(
-    applyToolCallShimToBuffer(
-      "Read",
-      JSON.stringify({ file_path: "/etc/hosts", pages: "1-3" })
-    )
+    applyToolCallShimToBuffer("Read", JSON.stringify({ file_path: "/etc/hosts", pages: "1-3" }))
   );
   assert.equal("pages" in out, false);
 });
 
 test("applyToolCallShimToBuffer: Read strips malformed pages even on PDFs", () => {
   const out = JSON.parse(
-    applyToolCallShimToBuffer(
-      "Read",
-      JSON.stringify({ file_path: "/tmp/doc.pdf", pages: "abc" })
-    )
+    applyToolCallShimToBuffer("Read", JSON.stringify({ file_path: "/tmp/doc.pdf", pages: "abc" }))
   );
   assert.equal("pages" in out, false);
 });
 
 test("applyToolCallShimToBuffer: Read accepts a single page on PDFs", () => {
   const out = JSON.parse(
-    applyToolCallShimToBuffer(
-      "Read",
-      JSON.stringify({ file_path: "/tmp/doc.PDF", pages: "7" })
-    )
+    applyToolCallShimToBuffer("Read", JSON.stringify({ file_path: "/tmp/doc.PDF", pages: "7" }))
   );
   assert.equal(out.pages, "7");
 });
@@ -236,6 +227,342 @@ test("applyToolCallShimToBuffer: non-shimmed tool passes raw through", () => {
   assert.equal(applyToolCallShimToBuffer("some_other_tool", raw), raw);
 });
 
+// -------- Skill shim tests (GLM-5.2 emits `name` instead of `skill`) --------
+
+test("applyToolCallShimToBuffer: Skill remaps name -> skill when skill is missing", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Skill",
+      JSON.stringify({ name: "bmad-code-review", args: "review epic 17" })
+    )
+  );
+  assert.equal(out.skill, "bmad-code-review");
+  assert.equal(out.args, "review epic 17");
+  assert.equal("name" in out, false, "name must be removed after remap");
+});
+
+test("applyToolCallShimToBuffer: Skill preserves skill when already correct", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Skill",
+      JSON.stringify({ skill: "bmad-code-review", args: "review epic 17" })
+    )
+  );
+  assert.equal(out.skill, "bmad-code-review");
+  assert.equal(out.args, "review epic 17");
+  assert.equal("name" in out, false);
+});
+
+test("applyToolCallShimToBuffer: Skill does not remap name when skill is present", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Skill",
+      JSON.stringify({ skill: "correct-skill", name: "wrong-skill", args: "x" })
+    )
+  );
+  assert.equal(out.skill, "correct-skill");
+  assert.equal("name" in out, false, "stray name should be dropped when skill exists");
+});
+
+test("applyToolCallShimToBuffer: Skill with no name and no skill passes through", () => {
+  const out = JSON.parse(applyToolCallShimToBuffer("Skill", JSON.stringify({ args: "x" })));
+  assert.deepEqual(out, { args: "x" });
+});
+
+test("applyToolCallShimToBuffer: Skill with empty buffer -> empty object", () => {
+  const out = JSON.parse(applyToolCallShimToBuffer("Skill", ""));
+  assert.deepEqual(out, {});
+});
+
+// -------- TaskUpdate shim tests (GLM-5.2 emits taskId as number) --------
+
+test("applyToolCallShimToBuffer: TaskUpdate coerces numeric taskId -> string", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ taskId: 1, status: "in_progress" }))
+  );
+  assert.equal(out.taskId, "1");
+  assert.equal(typeof out.taskId, "string");
+  assert.equal(out.status, "in_progress");
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate preserves string taskId", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ taskId: "abc-123", status: "done" }))
+  );
+  assert.equal(out.taskId, "abc-123");
+  assert.equal(out.status, "done");
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate coerces large numeric taskId -> string", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "TaskUpdate",
+      JSON.stringify({ taskId: 1234567890, status: "completed" })
+    )
+  );
+  assert.equal(out.taskId, "1234567890");
+  assert.equal(typeof out.taskId, "string");
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate remaps id -> taskId when taskId is missing", () => {
+  // Real-world case: GLM emits `id` instead of `taskId`
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ id: 1, status: "completed" }))
+  );
+  assert.equal(out.taskId, "1");
+  assert.equal(out.status, "completed");
+  assert.equal("id" in out, false, "id should be removed after remap");
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate remaps string id -> taskId", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ id: "abc-123", status: "done" }))
+  );
+  assert.equal(out.taskId, "abc-123");
+  assert.equal("id" in out, false);
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate with no taskId passes through", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("TaskUpdate", JSON.stringify({ status: "done" }))
+  );
+  assert.deepEqual(out, { status: "done" });
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate with empty buffer -> empty object", () => {
+  const out = JSON.parse(applyToolCallShimToBuffer("TaskUpdate", ""));
+  assert.deepEqual(out, {});
+});
+
+// -------- Agent shim tests (GLM-5.2-max emits `description` instead of `prompt`) --------
+
+test("applyToolCallShimToBuffer: Agent copies description -> prompt when prompt is missing", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({
+        description: "UX designer review Admin Console plan",
+        agent: "general-purpose",
+      })
+    )
+  );
+  assert.equal(out.prompt, "UX designer review Admin Console plan");
+  assert.equal(out.agent, "general-purpose");
+  assert.equal(
+    out.description,
+    "UX designer review Admin Console plan",
+    "description must be kept"
+  );
+});
+
+test("applyToolCallShimToBuffer: Agent preserves prompt when already correct, adds description from prompt", () => {
+  // GLM emits only prompt (no description) — shim must add description from prompt
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({ prompt: "Review the architecture", agent: "general-purpose" })
+    )
+  );
+  assert.equal(out.prompt, "Review the architecture");
+  assert.equal(out.agent, "general-purpose");
+  assert.equal(typeof out.description, "string", "description added from prompt");
+  assert.equal(out.description, "Review the architecture");
+});
+
+test("applyToolCallShimToBuffer: Agent keeps description when prompt is present", () => {
+  // Agent tool requires BOTH description AND prompt. When both present, keep both.
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({
+        prompt: "correct prompt",
+        description: "short description",
+        agent: "general-purpose",
+      })
+    )
+  );
+  assert.equal(out.prompt, "correct prompt");
+  assert.equal(out.description, "short description", "description must be kept");
+});
+
+test("applyToolCallShimToBuffer: Agent with no description and no prompt passes through", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("Agent", JSON.stringify({ agent: "general-purpose" }))
+  );
+  assert.equal(out.agent, "general-purpose");
+  assert.equal("prompt" in out, false);
+  assert.equal("description" in out, false);
+});
+
+test("applyToolCallShimToBuffer: Agent with empty buffer -> empty object", () => {
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", ""));
+  assert.deepEqual(out, {});
+});
+
+test("applyToolCallShimToBuffer: Agent copies description only (no agent field)", () => {
+  // Real-world case from session 241b7ee8: GLM-5.2-max emitted only description, no agent
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({ description: "UX designer review Admin Console plan" })
+    )
+  );
+  assert.equal(out.prompt, "UX designer review Admin Console plan");
+  assert.equal(
+    out.description,
+    "UX designer review Admin Console plan",
+    "description must be kept"
+  );
+});
+
+test("applyToolCallShimToBuffer: Agent copies prompt -> description when description is missing", () => {
+  // Real-world case: GLM emits only prompt (long), omits description
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({
+        prompt: "You are Sally, UX designer. Review the Admin Console UX plan.",
+        run_in_background: true,
+      })
+    )
+  );
+  assert.equal(out.prompt, "You are Sally, UX designer. Review the Admin Console UX plan.");
+  assert.equal(typeof out.description, "string", "description must be added");
+  assert.equal(out.description.length > 0, true);
+  assert.equal(out.run_in_background, true);
+});
+
+test("applyToolCallShimToBuffer: Agent truncates long prompt when copying to description", () => {
+  const longPrompt = "A".repeat(200);
+  const out = JSON.parse(
+    applyToolCallShimToBuffer("Agent", JSON.stringify({ prompt: longPrompt }))
+  );
+  assert.equal(out.prompt, longPrompt);
+  assert.equal(out.description.length, 80, "description truncated to 80 chars");
+  assert.equal(out.description.endsWith("..."), true);
+});
+
+test("applyToolCallShimToBuffer: Agent with both prompt and description keeps both unchanged", () => {
+  const out = JSON.parse(
+    applyToolCallShimToBuffer(
+      "Agent",
+      JSON.stringify({
+        prompt: "full task",
+        description: "short summary",
+        agent: "general-purpose",
+      })
+    )
+  );
+  assert.equal(out.prompt, "full task");
+  assert.equal(out.description, "short summary");
+  assert.equal(out.agent, "general-purpose");
+});
+
+test("hasToolCallShim: returns true for Agent", () => {
+  assert.equal(hasToolCallShim("Agent"), true);
+});
+
+// -------- Truncated JSON + shim interaction tests --------
+// GLM-5.2-max cuts off tool call args mid-stream, leaving unmatched brackets.
+// Without repair, the shim falls back to {} and loses the fields it needs to remap.
+
+test("applyToolCallShimToBuffer: Agent with truncated description (missing closing brace) + repaired raw", () => {
+  // Real-world case from session 241b7ee8: GLM streamed {"description": "..." with no closing }
+  const truncated = '{"description": "UX designer review Admin Console plan"';
+  const repaired = '{"description": "UX designer review Admin Console plan"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", truncated, repaired));
+  assert.equal(out.prompt, "UX designer review Admin Console plan");
+  assert.equal(
+    out.description,
+    "UX designer review Admin Console plan",
+    "description kept after repair"
+  );
+});
+
+test("applyToolCallShimToBuffer: Agent with truncated description, no repair provided -> falls back to {}", () => {
+  // Without repairedRaw, JSON.parse fails on truncated input -> {} -> no prompt
+  const truncated = '{"description": "UX designer review Admin Console plan"';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", truncated));
+  assert.equal("prompt" in out, false);
+  assert.equal("description" in out, false);
+});
+
+test("applyToolCallShimToBuffer: Skill with truncated name (missing closing brace) + repaired raw", () => {
+  const truncated = '{"name": "bmad-product-brief"';
+  const repaired = '{"name": "bmad-product-brief"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Skill", truncated, repaired));
+  assert.equal(out.skill, "bmad-product-brief");
+  assert.equal("name" in out, false);
+});
+
+test("applyToolCallShimToBuffer: TaskUpdate with truncated taskId (missing closing brace) + repaired raw", () => {
+  const truncated = '{"taskId": 1, "status": "in_progress"';
+  const repaired = '{"taskId": 1, "status": "in_progress"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("TaskUpdate", truncated, repaired));
+  assert.equal(out.taskId, "1");
+  assert.equal(out.status, "in_progress");
+});
+
+test("applyToolCallShimToBuffer: Agent with truncated nested value + repaired raw", () => {
+  // Truncated mid-string-value with nested structure
+  const truncated = '{"description": "Review the plan", "agent": "general-purpose"';
+  const repaired = '{"description": "Review the plan", "agent": "general-purpose"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", truncated, repaired));
+  assert.equal(out.prompt, "Review the plan");
+  assert.equal(out.agent, "general-purpose");
+  assert.equal(out.description, "Review the plan", "description kept after repair");
+});
+
+test("applyToolCallShimToBuffer: Agent with valid JSON, repairedRaw ignored (raw parses fine)", () => {
+  const raw = '{"prompt": "already correct", "description": "short"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", raw, '{"description": "wrong"}'));
+  // raw parses successfully, so repairedRaw is not used
+  assert.equal(out.prompt, "already correct");
+  assert.equal(out.description, "short");
+});
+
+test("applyToolCallShimToBuffer: Agent remaps summary -> description and message -> prompt", () => {
+  const raw =
+    '{"summary": "Analyze performance", "message": "Check memory leaks", "type": "research"}';
+  const out = JSON.parse(applyToolCallShimToBuffer("Agent", raw));
+  assert.equal(out.description, "Analyze performance");
+  assert.equal(out.prompt, "Check memory leaks");
+  assert.equal("summary" in out, false);
+  assert.equal("message" in out, false);
+  assert.equal("type" in out, false);
+});
+
+test("applyToolCallShimToBuffer: AskUserQuestion normalizes flat question and string options", () => {
+  const raw = JSON.stringify({
+    question: "Do you want to proceed?",
+    header: "Confirmation",
+    options: ["Yes", "No"],
+  });
+  const out = JSON.parse(applyToolCallShimToBuffer("AskUserQuestion", raw));
+  assert.equal(Array.isArray(out.questions), true);
+  assert.equal(out.questions.length, 1);
+  assert.equal(out.questions[0].header, "Confirmation");
+  assert.equal(out.questions[0].question, "Do you want to proceed?");
+  assert.deepEqual(out.questions[0].options, [
+    { label: "Yes", description: "" },
+    { label: "No", description: "" },
+  ]);
+  assert.equal("question" in out, false);
+  assert.equal("options" in out, false);
+});
+
+test("applyToolCallShimToBuffer: AskUserQuestion handles null question gracefully", () => {
+  const raw = JSON.stringify({
+    questions: [
+      { header: "Step 1", question: "Continue?", options: [{ label: "OK", description: "" }] },
+    ],
+    question: null,
+  });
+  const out = JSON.parse(applyToolCallShimToBuffer("AskUserQuestion", raw));
+  assert.equal(out.questions.length, 1);
+  assert.equal(out.questions[0].header, "Step 1");
+});
+
 // -------- Streaming integration tests --------
 
 function freshState() {
@@ -249,8 +576,11 @@ function freshState() {
   };
 }
 
-function streamChunks(chunks: any[], state: any): any[] {
-  const all: any[] = [];
+function streamChunks(
+  chunks: Parameters<typeof openaiToClaudeResponse>[0][],
+  state: Parameters<typeof openaiToClaudeResponse>[1]
+): unknown[] {
+  const all: unknown[] = [];
   for (const c of chunks) {
     const out = openaiToClaudeResponse(c, state);
     if (out) all.push(...out);

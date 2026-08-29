@@ -78,17 +78,8 @@ function trackKills() {
     if (signal === 0) {
       return pid >= 1000000 ? true : (origKill(pid, 0), true);
     }
-    if (pid >= 1000000) {
-      kills.push({ pid, signal: signal as string | number });
-      return true;
-    }
-    try {
-      origKill(pid, signal as NodeJS.Signals);
-      kills.push({ pid, signal: signal as string | number });
-      return true;
-    } catch {
-      return false;
-    }
+    kills.push({ pid, signal: signal as string | number });
+    return true;
   };
   (process as unknown as { kill: KillFn }).kill = stub;
   return {

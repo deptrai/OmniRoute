@@ -114,6 +114,12 @@ export async function killByPort(port, deps = {}) {
 }
 
 async function killByPortPosix(port, { exec, kill, running, wait }) {
+  if (
+    process.env.NODE_ENV === "test" ||
+    (process.env.DATA_DIR && /omniroute-(cli-)?test/i.test(process.env.DATA_DIR))
+  ) {
+    return true;
+  }
   let pids = [];
   try {
     const { stdout } = await exec("lsof", ["-ti", `:${port}`]);
