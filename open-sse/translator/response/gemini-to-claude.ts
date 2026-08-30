@@ -146,20 +146,30 @@ export function geminiToClaudeResponse(chunk, state) {
   const usageMeta = response.usageMetadata || chunk.usageMetadata;
   if (usageMeta && typeof usageMeta === "object") {
     const inputTokens =
-      typeof usageMeta.promptTokenCount === "number" ? usageMeta.promptTokenCount : 0;
+      typeof usageMeta.promptTokenCount === "number" && Number.isFinite(usageMeta.promptTokenCount)
+        ? usageMeta.promptTokenCount
+        : 0;
     const candidatesTokens =
-      typeof usageMeta.candidatesTokenCount === "number" ? usageMeta.candidatesTokenCount : 0;
+      typeof usageMeta.candidatesTokenCount === "number" &&
+      Number.isFinite(usageMeta.candidatesTokenCount)
+        ? usageMeta.candidatesTokenCount
+        : 0;
     const thoughtsTokens =
-      typeof usageMeta.thoughtsTokenCount === "number" ? usageMeta.thoughtsTokenCount : 0;
+      typeof usageMeta.thoughtsTokenCount === "number" &&
+      Number.isFinite(usageMeta.thoughtsTokenCount)
+        ? usageMeta.thoughtsTokenCount
+        : 0;
     const cachedTokens =
-      typeof usageMeta.cachedContentTokenCount === "number" ? usageMeta.cachedContentTokenCount : 0;
+      typeof usageMeta.cachedContentTokenCount === "number" &&
+      Number.isFinite(usageMeta.cachedContentTokenCount)
+        ? usageMeta.cachedContentTokenCount
+        : 0;
 
-    const uncachedInputTokens =
-      cachedTokens > 0 ? Math.max(0, inputTokens - cachedTokens) : inputTokens;
+    const uncachedInputTokens = Math.max(0, inputTokens - cachedTokens);
 
     state.usage = {
       input_tokens: uncachedInputTokens,
-      output_tokens: candidatesTokens + thoughtsTokens,
+      output_tokens: Math.max(0, candidatesTokens + thoughtsTokens),
     };
     if (cachedTokens > 0) {
       state.usage.cache_read_input_tokens = cachedTokens;
