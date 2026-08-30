@@ -68,7 +68,9 @@ test("text block opens once and stays open across multiple chunks", () => {
     [baseChunk([{ text: "a" }]), baseChunk([{ text: "b" }]), baseChunk([{ text: "c" }])],
     state
   );
-  const starts = out.filter((e) => e.type === "content_block_start" && e.content_block.type === "text");
+  const starts = out.filter(
+    (e) => e.type === "content_block_start" && e.content_block.type === "text"
+  );
   const deltas = out.filter((e) => e.type === "content_block_delta");
   assert.equal(starts.length, 1, "only one text block_start");
   assert.equal(deltas.length, 3);
@@ -107,9 +109,7 @@ test("text part with thoughtSignature (not thought) still emits as text", () => 
 // ── functionCall → tool_use ───────────────────────────────────────────────────
 
 test("functionCall emits tool_use block with input_json_delta", () => {
-  const out = run([
-    baseChunk([{ functionCall: { name: "getWeather", args: { city: "NYC" } } }]),
-  ]);
+  const out = run([baseChunk([{ functionCall: { name: "getWeather", args: { city: "NYC" } } }])]);
   const start = out.find((e) => e.type === "content_block_start");
   assert.equal(start.content_block.type, "tool_use");
   assert.equal(start.content_block.name, "getWeather");
@@ -191,41 +191,55 @@ test("finish closes open text block before message_delta", () => {
 
 test("usageMetadata populates state.usage with input + output (candidates+thoughts)", () => {
   const state = {};
-  run([
-    {
-      responseId: "r",
-      modelVersion: "m",
-      candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }],
-      usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 4, thoughtsTokenCount: 2 },
-    },
-  ], state);
+  run(
+    [
+      {
+        responseId: "r",
+        modelVersion: "m",
+        candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }],
+        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 4, thoughtsTokenCount: 2 },
+      },
+    ],
+    state
+  );
   assert.equal(state.usage.input_tokens, 10);
   assert.equal(state.usage.output_tokens, 6);
 });
 
-test("cachedContentTokenCount adds cache_read_input_tokens when > 0", () => {
+test("cachedContentTokenCount adds cache_read_input_tokens when > 0 and unsets cached from input_tokens", () => {
   const state = {};
-  run([
-    {
-      responseId: "r",
-      modelVersion: "m",
-      candidates: [{ content: { parts: [] }, finishReason: "STOP" }],
-      usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1, cachedContentTokenCount: 3 },
-    },
-  ], state);
+  run(
+    [
+      {
+        responseId: "r",
+        modelVersion: "m",
+        candidates: [{ content: { parts: [] }, finishReason: "STOP" }],
+        usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1, cachedContentTokenCount: 3 },
+      },
+    ],
+    state
+  );
+  assert.equal(
+    state.usage.input_tokens,
+    2,
+    "input_tokens must be promptTokenCount minus cachedContentTokenCount"
+  );
   assert.equal(state.usage.cache_read_input_tokens, 3);
 });
 
 test("usageMetadata at chunk level (not response level) is read", () => {
   const state = {};
-  run([
-    {
-      responseId: "r",
-      modelVersion: "m",
-      candidates: [{ content: { parts: [] }, finishReason: "STOP" }],
-      usageMetadata: { promptTokenCount: 7, candidatesTokenCount: 2 },
-    },
-  ], state);
+  run(
+    [
+      {
+        responseId: "r",
+        modelVersion: "m",
+        candidates: [{ content: { parts: [] }, finishReason: "STOP" }],
+        usageMetadata: { promptTokenCount: 7, candidatesTokenCount: 2 },
+      },
+    ],
+    state
+  );
   assert.equal(state.usage.input_tokens, 7);
   assert.equal(state.usage.output_tokens, 2);
 });
@@ -234,7 +248,13 @@ test("usageMetadata at chunk level (not response level) is read", () => {
 
 test("Antigravity {response:{...}} wrapper is unwrapped", () => {
   const out = run([
-    { response: { responseId: "rw", modelVersion: "mw", candidates: [{ content: { parts: [{ text: "w" }] } }] } },
+    {
+      response: {
+        responseId: "rw",
+        modelVersion: "mw",
+        candidates: [{ content: { parts: [{ text: "w" }] } }],
+      },
+    },
   ]);
   assert.equal(out[0].type, "message_start");
   assert.equal(out[0].message.id, "rw");

@@ -48,15 +48,13 @@ import * as log from "../utils/logger";
 import { checkAndRefreshToken } from "../services/tokenRefresh";
 import { createHookContext, runHooks, initPreRequestRegistry } from "@/lib/middleware/registry";
 import { deleteHandoff, getHandoff } from "@/lib/db/contextHandoffs";
-import { updateCombo } from "@/lib/db/combos";
+import { getCombos, updateCombo } from "@/lib/db/combos";
 import { promoteSuccessfulComboModel } from "@/lib/combos/autoPromote";
+import { getCachedSettings, getCombosCacheVersion } from "@/lib/db/readCache";
 import {
   deleteSessionAccountAffinity,
-  getCachedSettings,
-  getCombos,
-  getCombosCacheVersion,
   getSessionAccountAffinity,
-} from "@/lib/localDb";
+} from "@/lib/db/sessionAccountAffinity";
 import { resolveModelLockoutSettings } from "@/lib/resilience/modelLockoutSettings";
 import {
   ensureOpenAIStoreSessionFallback,

@@ -648,8 +648,7 @@ function decodeChatToolCall(buf: Uint8Array): DecodedToolCall | null {
       else if (fn === 2) name = val;
       else if (fn === 3) argumentsJson = val;
     } else if (wt === 0) {
-      let v: number;
-      [v, off] = readVarint(buf, off);
+      [, off] = readVarint(buf, off);
     } else if (wt === 1) {
       off += 8;
     } else if (wt === 5) {

@@ -576,8 +576,11 @@ function freshState() {
   };
 }
 
-function streamChunks(chunks: any[], state: any): any[] {
-  const all: any[] = [];
+function streamChunks(
+  chunks: Parameters<typeof openaiToClaudeResponse>[0][],
+  state: Parameters<typeof openaiToClaudeResponse>[1]
+): unknown[] {
+  const all: unknown[] = [];
   for (const c of chunks) {
     const out = openaiToClaudeResponse(c, state);
     if (out) all.push(...out);
