@@ -114,7 +114,42 @@ test("Gemini -> Claude stream: functionCall becomes tool_use and MAX_TOKENS maps
   );
   assert.equal(result[4].usage.output_tokens, 5);
   assert.equal(result[4].usage.cache_read_input_tokens, 1);
+  assert.equal(result[4].usage.cache_creation_input_tokens, 0);
   assert.equal(result[5].type, "message_stop");
+});
+
+test("Gemini -> Claude stream: cachedContentTokenCount > promptTokenCount clamps input_tokens to 0", () => {
+  const state = {};
+  const result = geminiToClaudeResponse(
+    {
+      responseId: "resp-3-clamp",
+      modelVersion: "gemini-2.5-pro",
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                functionCall: {
+                  name: "mcp__filesystem__read_file",
+                  args: { path: "/tmp/b" },
+                },
+              },
+            ],
+          },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 5,
+        candidatesTokenCount: 2,
+        cachedContentTokenCount: 10,
+      },
+    },
+    state
+  );
+
+  assert.equal(result[4].usage.input_tokens, 0, "must clamp to 0");
+  assert.equal(result[4].usage.cache_read_input_tokens, 10);
+  assert.equal(result[4].usage.cache_creation_input_tokens, 0);
 });
 
 test("Gemini -> Claude stream: STOP after prior tool use still maps to tool_use", () => {
