@@ -225,6 +225,45 @@ test("cachedContentTokenCount adds cache_read_input_tokens when > 0 and unsets c
     "input_tokens must be promptTokenCount minus cachedContentTokenCount"
   );
   assert.equal(state.usage.cache_read_input_tokens, 3);
+  assert.equal(state.usage.cache_creation_input_tokens, 0);
+});
+
+test("cachedContentTokenCount matches CAP-1 acceptance criteria (5 prompt, 1 cached -> 4 uncached)", () => {
+  const state = {};
+  run(
+    [
+      {
+        responseId: "r",
+        modelVersion: "m",
+        candidates: [{ content: { parts: [] }, finishReason: "STOP" }],
+        usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1, cachedContentTokenCount: 1 },
+      },
+    ],
+    state
+  );
+  assert.equal(state.usage.input_tokens, 4);
+  assert.equal(state.usage.cache_read_input_tokens, 1);
+});
+
+test("cachedContentTokenCount > promptTokenCount clamps input_tokens to 0 (no negative values)", () => {
+  const state = {};
+  run(
+    [
+      {
+        responseId: "r",
+        modelVersion: "m",
+        candidates: [{ content: { parts: [] }, finishReason: "STOP" }],
+        usageMetadata: {
+          promptTokenCount: 5,
+          candidatesTokenCount: 1,
+          cachedContentTokenCount: 10,
+        },
+      },
+    ],
+    state
+  );
+  assert.equal(state.usage.input_tokens, 0, "must clamp to 0 via Math.max");
+  assert.equal(state.usage.cache_read_input_tokens, 10);
 });
 
 test("usageMetadata at chunk level (not response level) is read", () => {

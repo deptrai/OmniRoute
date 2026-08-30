@@ -301,10 +301,10 @@ export interface CompressionResult {
 }
 
 export const DEFAULT_COMPRESSION_CONFIG: CompressionConfig = {
-  enabled: false,
+  enabled: true,
   defaultMode: "off",
   autoTriggerMode: "lite",
-  autoTriggerTokens: 0,
+  autoTriggerTokens: 180000,
   cacheMinutes: 5,
   preserveSystemPrompt: true,
   preserveSystemPromptMode: "always",
