@@ -163,6 +163,7 @@ export function geminiToClaudeResponse(chunk, state) {
     };
     if (cachedTokens > 0) {
       state.usage.cache_read_input_tokens = cachedTokens;
+      state.usage.cache_creation_input_tokens = 0;
     }
   }
 
