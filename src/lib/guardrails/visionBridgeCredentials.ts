@@ -104,17 +104,31 @@ export async function hasUsableCredentialsForModel(model: string): Promise<boole
   const isNoAuth = isNoAuthProviderKey(rawProvider, provider);
   try {
     const { getProviderConnections } = await loadProvidersModule();
-    const connections = await getProviderConnections({ provider, isActive: true });
-    if (!Array.isArray(connections)) return null;
-    // Empty active set: keyed providers are definitively unusable; no-auth
-    // providers still work through the synthetic "noauth" connection.
-    if (connections.length === 0) return isNoAuth;
+    const providersToCheck = new Set<string>([provider, rawProvider]);
+    if (
+      provider === "antigravity" ||
+      rawProvider === "antigravity" ||
+      provider === "agy" ||
+      rawProvider === "agy"
+    ) {
+      providersToCheck.add("antigravity");
+      providersToCheck.add("agy");
+    }
+
+    let allConnections: any[] = [];
+    for (const p of providersToCheck) {
+      const conns = await getProviderConnections({ provider: p, isActive: true });
+      if (Array.isArray(conns)) {
+        allConnections.push(...conns);
+      }
+    }
+    if (allConnections.length === 0) return isNoAuth;
     // No-auth rows store no API key (authType "noauth" + empty apiKey would
     // fail the generic key check) — only a terminal status blocks them.
     if (isNoAuth) {
-      return !connections.some((c: any) => hasTerminalConnectionStatus(c));
+      return !allConnections.some((c: any) => hasTerminalConnectionStatus(c));
     }
-    return connections.some((c: any) => isProviderConnectionUsable(c));
+    return allConnections.some((c: any) => isProviderConnectionUsable(c));
   } catch {
     return null;
   }
