@@ -396,8 +396,11 @@ export function geminiToClaudeResponse(chunk, state) {
     const cachedTokens =
       typeof usageMeta.cachedContentTokenCount === "number" ? usageMeta.cachedContentTokenCount : 0;
 
+    const uncachedInputTokens =
+      cachedTokens > 0 ? Math.max(0, inputTokens - cachedTokens) : inputTokens;
+
     state.usage = {
-      input_tokens: inputTokens,
+      input_tokens: uncachedInputTokens,
       output_tokens: candidatesTokens + thoughtsTokens,
     };
     if (cachedTokens > 0) {
