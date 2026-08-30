@@ -2,10 +2,15 @@ import type { RegistryModel } from "../../shared.ts";
 
 export const DEVIN_MODEL_CATALOG: RegistryModel[] = [
   // Cognition / SWE — default model family recommended for coding tasks
-  { id: "swe-1-7-lightning", name: "SWE-1.7 Lightning", contextLength: 202752 },
-  { id: "swe-1-7", name: "SWE-1.7", contextLength: 262000 },
-  { id: "swe-1-6-fast", name: "SWE-1.6 Fast" },
-  { id: "swe-1-6", name: "SWE-1.6" },
+  {
+    id: "swe-1-7-lightning",
+    name: "SWE-1.7 Lightning",
+    contextLength: 202752,
+    supportsVision: true,
+  },
+  { id: "swe-1-7", name: "SWE-1.7", contextLength: 262000, supportsVision: true },
+  { id: "swe-1-6-fast", name: "SWE-1.6 Fast", supportsVision: true },
+  { id: "swe-1-6", name: "SWE-1.6", supportsVision: true },
   // Claude Fable 5
   { id: "claude-5-fable-max", name: "Claude Fable 5 Max", contextLength: 1000000 },
   { id: "claude-5-fable-xhigh", name: "Claude Fable 5 XHigh", contextLength: 1000000 },
