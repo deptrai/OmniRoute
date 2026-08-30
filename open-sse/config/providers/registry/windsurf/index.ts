@@ -18,14 +18,14 @@ export const windsurfProvider: RegistryEntry = {
   models: [
     // ── Cognition / SWE ──────────────────────────────────────────────────
     // swe-1.7 is the Max tier; swe-1.7-lightning is the paid fast variant.
-    { id: "swe-1.7", name: "SWE-1.7 (Max)" },
-    { id: "swe-1.7-max", name: "SWE-1.7 Max (alias)" },
-    { id: "swe-1.7-medium", name: "SWE-1.7 Medium" },
-    { id: "swe-1.7-lightning", name: "SWE-1.7 Lightning" },
-    { id: "swe-1.7-lightning-medium", name: "SWE-1.7 Lightning Medium" },
-    { id: "swe-1.7-fast", name: "SWE-1.7 Fast (legacy alias)" },
-    { id: "swe-1.6-fast", name: "SWE-1.6 Fast" },
-    { id: "swe-1.6", name: "SWE-1.6" },
+    { id: "swe-1.7", name: "SWE-1.7 (Max)", supportsVision: true },
+    { id: "swe-1.7-max", name: "SWE-1.7 Max (alias)", supportsVision: true },
+    { id: "swe-1.7-medium", name: "SWE-1.7 Medium", supportsVision: true },
+    { id: "swe-1.7-lightning", name: "SWE-1.7 Lightning", supportsVision: true },
+    { id: "swe-1.7-lightning-medium", name: "SWE-1.7 Lightning Medium", supportsVision: true },
+    { id: "swe-1.7-fast", name: "SWE-1.7 Fast (legacy alias)", supportsVision: true },
+    { id: "swe-1.6-fast", name: "SWE-1.6 Fast", supportsVision: true },
+    { id: "swe-1.6", name: "SWE-1.6", supportsVision: true },
     // ── Claude Opus 4.8 — effort-tiered ─────────────────────────────────
     { id: "claude-opus-4.8-max", name: "Claude Opus 4.8 Max", contextLength: 200000 },
     { id: "claude-opus-4.8-xhigh", name: "Claude Opus 4.8 XHigh", contextLength: 200000 },

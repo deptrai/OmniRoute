@@ -49,10 +49,8 @@ async function getComboVisionBridgeDecision(model: string): Promise<ComboVisionB
     if (!Array.isArray(rawModels)) return "process";
 
     // 4. Check each target for vision support
-    // combo-ref → conservative (process images)
-    // model step with no native vision → process images
-    // all model steps with native vision → safe to skip
     let hasModelStep = false;
+    let hasVisionCapableStep = false;
     for (const step of rawModels) {
       const s = step as Record<string, unknown>;
       if (s.kind === "combo-ref") return "process";
@@ -61,17 +59,20 @@ async function getComboVisionBridgeDecision(model: string): Promise<ComboVisionB
         const targetModel = s.model;
         if (typeof targetModel === "string") {
           const caps = getResolvedModelCapabilities(targetModel);
-          if (caps.supportsVision !== true) {
-            return "process";
+          if (caps.supportsVision === true) {
+            hasVisionCapableStep = true;
           }
-        } else {
-          return "process";
         }
       }
     }
 
-    // All model steps support vision — safe to skip
-    if (hasModelStep) return "skip";
+    // If the combo has at least one vision-capable target, safe to skip:
+    // comboStructure.ts filters out non-vision targets when requirements.requiresVision is true,
+    // routing image requests directly to the vision-capable target (e.g. gemini-3.7-flash-high).
+    if (hasVisionCapableStep) return "skip";
+
+    // All model steps lack vision — process images via bridge
+    if (hasModelStep) return "process";
 
     // No recognizable steps — don't force bridge
     return "not-combo";
