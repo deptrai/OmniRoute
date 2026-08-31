@@ -168,20 +168,35 @@ function resolveMaxConcurrent(override: number | undefined | null): number {
   return resolveOverride(override, EFFECTIVELY_INFINITE_CONCURRENCY);
 }
 
+export const LONG_CONTEXT_REQUEST_QUEUE_MAX_WAIT_MS = 120_000;
+const LONG_CONTEXT_PROVIDERS = new Set([
+  "zai-web",
+  "opencode-go",
+  "opencode",
+  "devin-desktop",
+  "windsurf",
+  "postman-agent",
+]);
+
 export function resolveRequestQueueMaxWaitMs(
   provider: string,
   configuredMaxWaitMs: number = currentRequestQueueSettings.maxWaitMs,
   connectionId?: string
 ): number {
-  const p = provider.trim().toLowerCase();
-  let legacyDefault = configuredMaxWaitMs;
-  if (p === "zai-web") {
-    legacyDefault = Math.max(configuredMaxWaitMs, ZAI_WEB_REQUEST_QUEUE_MAX_WAIT_MS);
-  } else if (p === "maxai" || p === "mx") {
+  const norm = provider.trim().toLowerCase();
+  let providerFloor = 0;
+  if (norm === "zai-web") {
+    providerFloor = ZAI_WEB_REQUEST_QUEUE_MAX_WAIT_MS;
+  } else if (norm === "maxai" || norm === "mx") {
     // MaxAI's slow reasoning models legitimately need up to ~5 min; floor the
     // per-request execution budget so they aren't cut off early.
-    legacyDefault = Math.max(configuredMaxWaitMs, MAXAI_REQUEST_QUEUE_MAX_WAIT_MS);
+    providerFloor = MAXAI_REQUEST_QUEUE_MAX_WAIT_MS;
+  } else if (LONG_CONTEXT_PROVIDERS.has(norm)) {
+    providerFloor = LONG_CONTEXT_REQUEST_QUEUE_MAX_WAIT_MS;
   }
+
+  const legacyDefault =
+    providerFloor > 0 ? Math.max(configuredMaxWaitMs, providerFloor) : configuredMaxWaitMs;
   const override = connectionId
     ? connectionRateLimitOverrides.get(connectionId)?.maxWaitMs
     : undefined;
