@@ -183,10 +183,13 @@ test("#6593 DEFAULT_REQUEST_QUEUE_MAX_WAIT_MS is 15s absent RATE_LIMIT_MAX_WAIT_
   assert.equal(resilienceSettings.DEFAULT_RESILIENCE_SETTINGS.requestQueue.maxWaitMs, 15000);
 });
 
-test("#6593 zai-web receives a provider-scoped 60s scheduling budget", () => {
+test("#6593 zai-web receives a provider-scoped 60s scheduling budget and long-context providers receive 120s floor", () => {
   assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("openai", 15_000), 15_000);
   assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("zai-web", 15_000), 60_000);
   assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("ZAI-WEB", 90_000), 90_000);
+  assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("opencode-go", 15_000), 120_000);
+  assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("devin-desktop", 15_000), 120_000);
+  assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("windsurf", 15_000), 120_000);
 });
 
 test("#6593 connection maxWaitMs override takes priority over the zai-web scheduling budget", () => {
