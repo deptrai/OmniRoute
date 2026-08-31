@@ -163,7 +163,6 @@ function resolveMaxConcurrent(override: number | undefined | null): number {
 
 export const LONG_CONTEXT_REQUEST_QUEUE_MAX_WAIT_MS = 120_000;
 const LONG_CONTEXT_PROVIDERS = new Set([
-  "zai-web",
   "opencode-go",
   "opencode",
   "devin-desktop",
@@ -176,7 +175,7 @@ export function resolveRequestQueueMaxWaitMs(
   configuredMaxWaitMs: number = currentRequestQueueSettings.maxWaitMs,
   connectionId?: string
 ): number {
-  const norm = provider.trim().toLowerCase();
+  const norm = typeof provider === "string" ? provider.trim().toLowerCase() : "";
   let providerFloor = 0;
   if (norm === "zai-web") {
     providerFloor = ZAI_WEB_REQUEST_QUEUE_MAX_WAIT_MS;
