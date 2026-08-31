@@ -78,6 +78,53 @@ test("OpenAI stream: reasoning_content closes before text content starts", () =>
   assert.equal(result[5].delta.text, "Answer");
 });
 
+test("OpenAI stream: pure reasoning with zero content/tools synthesizes fallback text block at finish for compaction", () => {
+  const state = createState();
+  const reasoning1 = openaiToClaudeResponse(
+    {
+      id: "chatcmpl-reason-only",
+      model: "swe-1-7",
+      choices: [
+        {
+          index: 0,
+          delta: { reasoning_content: "This is the summary of prior session." },
+          finish_reason: null,
+        },
+      ],
+    },
+    state
+  );
+  const finish = openaiToClaudeResponse(
+    {
+      id: "chatcmpl-reason-only",
+      model: "swe-1-7",
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+    },
+    state
+  );
+  const result = flatten([reasoning1, finish]);
+
+  // Message start
+  assert.equal(result[0].type, "message_start");
+  // Thinking block
+  assert.equal(result[1].type, "content_block_start");
+  assert.equal(result[1].content_block.type, "thinking");
+  assert.equal(result[2].type, "content_block_delta");
+  assert.equal(result[2].delta.thinking, "This is the summary of prior session.");
+  assert.equal(result[3].type, "content_block_stop");
+  // Synthesized text block from reasoning
+  assert.equal(result[4].type, "content_block_start");
+  assert.equal(result[4].content_block.type, "text");
+  assert.equal(result[5].type, "content_block_delta");
+  assert.equal(result[5].delta.text, "This is the summary of prior session.");
+  assert.equal(result[6].type, "content_block_stop");
+  // Message stop
+  assert.equal(result[7].type, "message_delta");
+  assert.equal(result[7].delta.stop_reason, "end_turn");
+  assert.equal(result[8].type, "message_stop");
+});
+
 test("OpenAI stream: internal reasoning replay placeholder stays hidden from Claude thinking block", () => {
   const state = createState();
   const placeholder = openaiToClaudeResponse(
