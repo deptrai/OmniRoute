@@ -188,6 +188,7 @@ test("#6593 zai-web receives a provider-scoped 60s scheduling budget and long-co
   assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("zai-web", 15_000), 60_000);
   assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("ZAI-WEB", 90_000), 90_000);
   assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("opencode-go", 15_000), 120_000);
+  assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("opencode", 15_000), 120_000);
   assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs(" OPENCODE-GO ", 15_000), 120_000);
   assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("devin-desktop", 15_000), 120_000);
   assert.equal(rateLimitManager.resolveRequestQueueMaxWaitMs("DEVIN-DESKTOP", 15_000), 120_000);
