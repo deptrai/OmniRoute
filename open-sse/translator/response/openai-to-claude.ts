@@ -47,10 +47,22 @@ function extractXmlInvokeBlocks(
     const toolCallTextMatch = remaining.match(/TOOL_CALL\s+([A-Za-z0-9_]+):\s*/);
 
     const matches = [
-      invokeMatch ? { type: "invoke" as const, index: invokeMatch.index!, data: invokeMatch } : null,
-      toolCallTagMatch ? { type: "tool_call_tag" as const, index: toolCallTagMatch.index!, data: toolCallTagMatch } : null,
-      toolCallTextMatch ? { type: "tool_call_text" as const, index: toolCallTextMatch.index!, data: toolCallTextMatch } : null,
-    ].filter(Boolean).sort((a, b) => a!.index - b!.index);
+      invokeMatch
+        ? { type: "invoke" as const, index: invokeMatch.index!, data: invokeMatch }
+        : null,
+      toolCallTagMatch
+        ? { type: "tool_call_tag" as const, index: toolCallTagMatch.index!, data: toolCallTagMatch }
+        : null,
+      toolCallTextMatch
+        ? {
+            type: "tool_call_text" as const,
+            index: toolCallTextMatch.index!,
+            data: toolCallTextMatch,
+          }
+        : null,
+    ]
+      .filter(Boolean)
+      .sort((a, b) => a!.index - b!.index);
 
     if (matches.length === 0) {
       cleaned += remaining;
@@ -95,9 +107,7 @@ function extractXmlInvokeBlocks(
         const name = (parsed.name || parsed.tool_name || "") as string;
         const rawArgs = parsed.arguments || parsed.args || parsed.parameters || {};
         const args: Record<string, string> =
-          typeof rawArgs === "string"
-            ? JSON.parse(rawArgs)
-            : (rawArgs as Record<string, string>);
+          typeof rawArgs === "string" ? JSON.parse(rawArgs) : (rawArgs as Record<string, string>);
         if (name) {
           toolCalls.push({ id: `toolu_txt_${Date.now()}_${toolCalls.length}`, name, args });
         }
@@ -115,12 +125,27 @@ function extractXmlInvokeBlocks(
       let jsonEndIndex = -1;
       for (let i = 0; i < afterPrefix.length; i++) {
         const c = afterPrefix[i];
-        if (escape) { escape = false; continue; }
-        if (c === "\\" && inString) { escape = true; continue; }
-        if (c === '"') { inString = !inString; continue; }
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (c === "\\" && inString) {
+          escape = true;
+          continue;
+        }
+        if (c === '"') {
+          inString = !inString;
+          continue;
+        }
         if (!inString) {
           if (c === "{") depth++;
-          else if (c === "}") { depth--; if (depth === 0) { jsonEndIndex = i + 1; break; } }
+          else if (c === "}") {
+            depth--;
+            if (depth === 0) {
+              jsonEndIndex = i + 1;
+              break;
+            }
+          }
         }
       }
       if (jsonEndIndex === -1) {
@@ -282,6 +307,9 @@ export function openaiToClaudeResponse(chunk, state) {
     state._markdownFenceOpening = false;
     state._markdownFenceClosingRun = 0;
     state._markdownLineIndent = 0;
+    if (!state.toolCalls) state.toolCalls = new Map();
+    state._accumulatedThinking = "";
+    state._hasContentEmitted = false;
     results.push({
       type: "message_start",
       message: {
@@ -327,6 +355,8 @@ export function openaiToClaudeResponse(chunk, state) {
       });
     }
 
+    state._accumulatedThinking = (state._accumulatedThinking || "") + reasoningContent;
+
     results.push({
       type: "content_block_delta",
       index: state.thinkingBlockIndex,
@@ -341,6 +371,7 @@ export function openaiToClaudeResponse(chunk, state) {
   if (delta?.content) {
     const strippedContent = stripInternalReasoningPlaceholder(delta.content);
     if (strippedContent) {
+      state._hasContentEmitted = true;
       stopThinkingBlock(state, results);
 
       // Rehydrate any Markdown boundary suffix buffered from the previous chunk
@@ -580,6 +611,35 @@ export function openaiToClaudeResponse(chunk, state) {
         type: "content_block_stop",
         index: blockIndex,
       });
+    }
+
+    // If the model produced ONLY reasoning/thinking and zero text/content blocks and zero tool calls
+    // (e.g. SWE 1.7 or deepseek models on pure reasoning / summarization / compaction turns), synthesize a
+    // text content block with the reasoning text so Claude Code CLI and Claude clients do not fail
+    // with "empty response" / "automatic compaction failed".
+    const hasToolCalls = (state.toolCalls && state.toolCalls.size > 0) || xmlToolCalls.length > 0;
+    if (
+      !state._hasContentEmitted &&
+      !hasToolCalls &&
+      typeof state._accumulatedThinking === "string" &&
+      state._accumulatedThinking.trim().length > 0
+    ) {
+      const fallbackIndex = state.nextBlockIndex++;
+      results.push({
+        type: "content_block_start",
+        index: fallbackIndex,
+        content_block: { type: "text", text: "" },
+      });
+      results.push({
+        type: "content_block_delta",
+        index: fallbackIndex,
+        delta: { type: "text_delta", text: state._accumulatedThinking },
+      });
+      results.push({
+        type: "content_block_stop",
+        index: fallbackIndex,
+      });
+      state._hasContentEmitted = true;
     }
 
     // Override finish_reason to tool_use if XML tool calls were found
