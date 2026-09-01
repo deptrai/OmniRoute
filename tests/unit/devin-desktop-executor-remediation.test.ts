@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 
 import {
   DevinDesktopExecutor,
+  classifyDevinDesktopError,
   encodeDevinDesktopRequest,
   resolveDevinDesktopExtensionVersion,
   resolveDevinDesktopVersion,
@@ -527,4 +528,86 @@ test("Devin Desktop sanitizes auth failures and never issues chat", async () => 
   } finally {
     await mock.close();
   }
+});
+
+test("Devin Desktop sanitizes Claude Code subagent prompt fingerprints", async () => {
+  let capturedPayload: Uint8Array | null = null;
+  const mock = await listen((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (c) => chunks.push(c));
+    request.on("end", () => {
+      if (request.url === "/exa.auth_pb.AuthService/GetUserJwt") {
+        response.writeHead(200, { "Content-Type": "application/proto" });
+        response.end(stringField(1, "jwt-value"));
+        return;
+      }
+      // Strip 5-byte connect envelope
+      capturedPayload = Buffer.concat(chunks).subarray(5);
+      response.writeHead(200, { "Content-Type": "application/connect+proto" });
+      response.end();
+    });
+  });
+
+  try {
+    await new DevinDesktopExecutor().execute({
+      model: "swe-1-7",
+      body: {
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are an agent for Claude Code, Anthropic's official CLI for Claude.\n" +
+              "For clear communication with the user the assistant MUST avoid using emojis.",
+          },
+          { role: "user", content: "hello" },
+        ],
+      },
+      stream: true,
+      credentials: {
+        accessToken: "test-token",
+        providerSpecificData: { baseUrl: mock.origin },
+      },
+    });
+
+    assert.ok(capturedPayload);
+    const text = new TextDecoder().decode(capturedPayload);
+    assert.doesNotMatch(text, /Anthropic's official CLI for Claude/);
+    assert.doesNotMatch(
+      text,
+      /For clear communication with the user the assistant MUST avoid using emojis/
+    );
+    assert.match(text, /You are an AI software engineering agent/);
+    assert.match(text, /Avoid using emojis/);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("Devin Desktop classifies trailer errors correctly (content policy -> 400, quota -> 429, auth -> 401/403)", () => {
+  const contentPolicyErr = classifyDevinDesktopError(
+    "permission_denied: Your request was blocked by our content policy. Please remove sensitive or unsafe content from your prompt, memories, and other settings and try again."
+  );
+  assert.equal(contentPolicyErr.status, 400);
+  assert.equal(contentPolicyErr.code, "content_policy_violation");
+  assert.equal(contentPolicyErr.type, "invalid_request_error");
+
+  const rateLimitErr = classifyDevinDesktopError(
+    "resource_exhausted: Rate limit exceeded for model swe-1-7"
+  );
+  assert.equal(rateLimitErr.status, 429);
+  assert.equal(rateLimitErr.code, "rate_limit_exceeded");
+
+  const authErr = classifyDevinDesktopError("unauthenticated: Invalid authentication token");
+  assert.equal(authErr.status, 401);
+  assert.equal(authErr.code, "invalid_api_key");
+
+  const permErr = classifyDevinDesktopError(
+    "permission_denied: User does not have access to this feature"
+  );
+  assert.equal(permErr.status, 403);
+  assert.equal(permErr.code, "permission_denied");
+
+  const serverErr = classifyDevinDesktopError("internal: An internal server error occurred");
+  assert.equal(serverErr.status, 502);
+  assert.equal(serverErr.code, "upstream_error");
 });

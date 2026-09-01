@@ -1717,6 +1717,22 @@ export function checkFallbackError(
   const rg = rot.gateFor(status, rotation?.account);
   if (rg) return rg;
   const errorStr = (errorText || "").toString();
+
+  // Content policy / safety filter violation: deterministic client payload error.
+  // Must NOT cool down account or trip breaker, because the account itself is completely healthy.
+  if (
+    /content policy|safety filter|blocked by .* policy|sensitive or unsafe content/i.test(
+      errorStr
+    ) ||
+    structuredError?.code === "content_policy_violation"
+  ) {
+    return {
+      shouldFallback: false,
+      cooldownMs: 0,
+      reason: RateLimitReason.UNKNOWN,
+      skipProviderBreaker: true,
+    };
+  }
   const profile = profileOverride ?? (provider ? getProviderProfile(provider) : null);
   const maxBackoffSteps = profile?.maxBackoffSteps ?? BACKOFF_CONFIG.maxLevel;
   const retryableStatuses = new Set([
