@@ -478,4 +478,30 @@ export const DEFAULT_PRICING_OAUTH = {
     "gpt-5.6-terra": GPT_5_6_TERRA_PRICING,
     "gpt-5.6-luna": GPT_5_6_LUNA_PRICING,
   },
+
+  // ── Devin Desktop (Cognition SWE-1.x models, Codeium OAuth backend) ──────
+  // Pricing from the Windsurf IDE model picker (verified 2026-09-01).
+  // SWE-1.7 Lightning: $2.5 Input / $1 Cached / $12.5 Output per 1M tokens.
+  // SWE-1.7 (non-Lightning tiers) are currently Free / Promo — no per-token charge.
+  "devin-desktop": {
+    "swe-1-7-lightning": {
+      input: 2.5,
+      output: 12.5,
+      cached: 1.0,
+    },
+    // SWE-1.6 is older, pricing roughly equivalent to SWE-1.7 non-lightning
+    "swe-1-6-fast": { input: 2.5, output: 12.5, cached: 1.0 },
+    "swe-1-6": { input: 2.5, output: 12.5, cached: 1.0 },
+  },
+
+  // ── Windsurf (same Codeium SWE catalog, different OAuth surface) ──────────
+  windsurf: {
+    "swe-1-7-lightning": {
+      input: 2.5,
+      output: 12.5,
+      cached: 1.0,
+    },
+    "swe-1-6-fast": { input: 2.5, output: 12.5, cached: 1.0 },
+    "swe-1-6": { input: 2.5, output: 12.5, cached: 1.0 },
+  },
 };
