@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 
 import {
   DevinDesktopExecutor,
+  classifyDevinDesktopError,
   encodeDevinDesktopRequest,
   resolveDevinDesktopExtensionVersion,
   resolveDevinDesktopVersion,
@@ -580,4 +581,33 @@ test("Devin Desktop sanitizes Claude Code subagent prompt fingerprints", async (
   } finally {
     await mock.close();
   }
+});
+
+test("Devin Desktop classifies trailer errors correctly (content policy -> 400, quota -> 429, auth -> 401/403)", () => {
+  const contentPolicyErr = classifyDevinDesktopError(
+    "permission_denied: Your request was blocked by our content policy. Please remove sensitive or unsafe content from your prompt, memories, and other settings and try again."
+  );
+  assert.equal(contentPolicyErr.status, 400);
+  assert.equal(contentPolicyErr.code, "content_policy_violation");
+  assert.equal(contentPolicyErr.type, "invalid_request_error");
+
+  const rateLimitErr = classifyDevinDesktopError(
+    "resource_exhausted: Rate limit exceeded for model swe-1-7"
+  );
+  assert.equal(rateLimitErr.status, 429);
+  assert.equal(rateLimitErr.code, "rate_limit_exceeded");
+
+  const authErr = classifyDevinDesktopError("unauthenticated: Invalid authentication token");
+  assert.equal(authErr.status, 401);
+  assert.equal(authErr.code, "invalid_api_key");
+
+  const permErr = classifyDevinDesktopError(
+    "permission_denied: User does not have access to this feature"
+  );
+  assert.equal(permErr.status, 403);
+  assert.equal(permErr.code, "permission_denied");
+
+  const serverErr = classifyDevinDesktopError("internal: An internal server error occurred");
+  assert.equal(serverErr.status, 502);
+  assert.equal(serverErr.code, "upstream_error");
 });

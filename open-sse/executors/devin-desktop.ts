@@ -701,6 +701,48 @@ function parseConnectTrailerError(payload: Uint8Array): ConnectTrailerError | nu
   return { code, message };
 }
 
+export function classifyDevinDesktopError(message: string): {
+  status: number;
+  message: string;
+  code: string;
+  type: string;
+} {
+  const lower = message.toLowerCase();
+
+  // Quota / rate-limit
+  if (
+    /rate limit|resource_exhausted|limit reached|reached .* limit|too many requests|quota|insufficient_quota|exceeded your current quota/i.test(
+      lower
+    )
+  ) {
+    return { status: 429, message, code: "rate_limit_exceeded", type: "rate_limit_error" };
+  }
+
+  // Content / safety policy — deterministic client error per-payload, do NOT rotate accounts or treat as 502
+  if (/content policy|safety filter|blocked|harm|sensitive or unsafe content/i.test(lower)) {
+    return {
+      status: 400,
+      message,
+      code: "content_policy_violation",
+      type: "invalid_request_error",
+    };
+  }
+
+  // Permission / auth errors
+  if (/unauthorized|invalid authentication|invalid credentials|unauthenticated/i.test(lower)) {
+    return { status: 401, message, code: "invalid_api_key", type: "authentication_error" };
+  }
+  if (
+    /permission.*denied|forbidden|not allowed|does not have permission/i.test(lower) &&
+    !/internal error/i.test(lower)
+  ) {
+    return { status: 403, message, code: "permission_denied", type: "permission_error" };
+  }
+
+  // Everything else is a transient 502
+  return { status: 502, message, code: "upstream_error", type: "devin_desktop_error" };
+}
+
 function finishReason(stopReason: number, hasToolCalls: boolean): string {
   if (hasToolCalls || stopReason === 10) return "tool_calls";
   if (stopReason === 3) return "length";
@@ -943,11 +985,16 @@ export class DevinDesktopExecutor extends BaseExecutor {
             choices: [{ index: 0, delta, finish_reason: reason }],
           });
         };
-        const emitError = (message: string) => {
+        const emitError = (
+          message: string,
+          status = 502,
+          code = "upstream_error",
+          type = "devin_desktop_error"
+        ) => {
           emit(
-            buildErrorBody(502, message, undefined, {
-              type: "devin_desktop_error",
-              code: "upstream_error",
+            buildErrorBody(status, message, undefined, {
+              type,
+              code,
             })
           );
           controller.enqueue(TEXT_ENCODER.encode("data: [DONE]\n\n"));
@@ -1051,8 +1098,15 @@ export class DevinDesktopExecutor extends BaseExecutor {
           if (pending.length !== 0) throw new Error("Truncated Devin Desktop Connect frame");
           if (!sawEndStream) throw new Error("Devin Desktop Connect stream ended without trailers");
           if (trailerError) {
-            const detail = sanitizeErrorMessage(`${trailerError.code}: ${trailerError.message}`);
-            emitError(`Devin Desktop stream error: ${detail}`);
+            const rawMessage = `${trailerError.code}: ${trailerError.message}`;
+            const classified = classifyDevinDesktopError(rawMessage);
+            const detail = sanitizeErrorMessage(rawMessage);
+            emitError(
+              `Devin Desktop stream error: ${detail}`,
+              classified.status,
+              classified.code,
+              classified.type
+            );
             return;
           }
 
