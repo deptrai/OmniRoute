@@ -139,6 +139,7 @@
       "tests/unit/circuit-breaker-abort-provider-trip-7907.test.ts",
       "tests/unit/circuit-breaker-client-abort.test.ts",
       "tests/unit/circuit-breaker-failure-kind.test.ts",
+      "tests/unit/circuit-breaker-local-execution.test.ts",
       "tests/unit/circuit-breaker-registry-cap.test.ts",
       "tests/unit/circuit-breaker-stream-controller-4602.test.ts",
       "tests/unit/claude-code-parity.test.ts",
