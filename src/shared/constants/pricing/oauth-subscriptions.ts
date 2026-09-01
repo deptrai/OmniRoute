@@ -480,16 +480,21 @@ export const DEFAULT_PRICING_OAUTH = {
   // ── Devin Desktop (Cognition SWE-1.x models, Codeium OAuth backend) ──────
   // Pricing from the Windsurf IDE model picker (verified 2026-09-01).
   // SWE-1.7 Lightning: $2.5 Input / $1 Cached / $12.5 Output per 1M tokens.
-  // SWE-1.7 (non-Lightning tiers) are currently Free / Promo — no per-token charge.
+  // SWE-1.7 (non-Lightning): half of Lightning price ($1.25 / $0.5 / $6.25).
   "devin-desktop": {
     "swe-1-7-lightning": {
       input: 2.5,
       output: 12.5,
       cached: 1.0,
     },
-    // SWE-1.6 is older, pricing roughly equivalent to SWE-1.7 non-lightning
-    "swe-1-6-fast": { input: 2.5, output: 12.5, cached: 1.0 },
-    "swe-1-6": { input: 2.5, output: 12.5, cached: 1.0 },
+    "swe-1-7": {
+      input: 1.25,
+      output: 6.25,
+      cached: 0.5,
+    },
+    // SWE-1.6 is older, priced at SWE-1.7 non-lightning rate
+    "swe-1-6-fast": { input: 1.25, output: 6.25, cached: 0.5 },
+    "swe-1-6": { input: 1.25, output: 6.25, cached: 0.5 },
   },
 
   // ── Windsurf (same Codeium SWE catalog, different OAuth surface) ──────────
@@ -499,7 +504,12 @@ export const DEFAULT_PRICING_OAUTH = {
       output: 12.5,
       cached: 1.0,
     },
-    "swe-1-6-fast": { input: 2.5, output: 12.5, cached: 1.0 },
-    "swe-1-6": { input: 2.5, output: 12.5, cached: 1.0 },
+    "swe-1-7": {
+      input: 1.25,
+      output: 6.25,
+      cached: 0.5,
+    },
+    "swe-1-6-fast": { input: 1.25, output: 6.25, cached: 0.5 },
+    "swe-1-6": { input: 1.25, output: 6.25, cached: 0.5 },
   },
 };
