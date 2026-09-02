@@ -393,6 +393,13 @@ export function checkResourcePressureBeforeProviderWork(): ResourcePressureGuard
   }
 }
 
+// #12254: handleChatCore resolves `{ success: false, status: 5xx }` for most upstream
+// failures, so execute() must not read a resolution as a success (it used to, and that
+// spurious _onSuccess() cancelled the call site's _onFailure() for the same attempt).
+// The chat path accounts for the outcome exactly once where the request context lives:
+// chat.ts via classifyProviderBreakerResult(), combo.ts via recordProviderFailure/Success.
+const chatPathOwnsBreakerAccounting = () => "ignore" as const;
+
 export async function executeChatWithBreaker({
   bypassCircuitBreaker,
   breaker,
@@ -594,13 +601,16 @@ export async function executeChatWithBreaker({
     }
 
     if (tlsFingerprintActive) {
-      const tracked = await breaker.execute(async () =>
-        runWithTlsTracking(tlsTrackingIdentity, chatFn)
+      const tracked = await breaker.execute(
+        async () => runWithTlsTracking(tlsTrackingIdentity, chatFn),
+        { classifyResult: chatPathOwnsBreakerAccounting }
       );
       return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
     }
 
-    const result = await breaker.execute(chatFn);
+    const result = await breaker.execute(chatFn, {
+      classifyResult: chatPathOwnsBreakerAccounting,
+    });
     return { result, tlsFingerprintUsed: false };
   } catch (cbErr: any) {
     if (cbErr instanceof CircuitBreakerOpenError) {

@@ -74,6 +74,7 @@ import {
   withSelectedConnectionHeader,
   withCorrelationId,
 } from "./chatHelpers";
+import { classifyProviderBreakerResult } from "./chatPredicates";
 import { connectionHasExtraKeys } from "@omniroute/open-sse/services/apiKeyRotator.ts";
 
 // Pipeline integration — wired modules
@@ -1313,7 +1314,9 @@ async function handleSingleModelChat(
 
       if (result.success) {
         clearModelLock(provider, credentials.connectionId, model);
-        if (!forceLiveComboTest) {
+        // #12254: exactly-once breaker accounting — combo successes are recorded by
+        // combo.ts (recordProviderSuccess); live combo tests never touch the breaker.
+        if (classifyProviderBreakerResult(result, isCombo, forceLiveComboTest) === "success") {
           breaker._onSuccess();
         }
         if (injectedHandoff && runtimeOptions.sessionId && comboName) {
@@ -1651,11 +1654,7 @@ async function handleSingleModelChat(
         continue;
       }
 
-      if (
-        !forceLiveComboTest &&
-        !isCombo &&
-        PROVIDER_BREAKER_FAILURE_STATUSES.has(Number(result.status))
-      ) {
+      if (classifyProviderBreakerResult(result, isCombo, forceLiveComboTest) === "failure") {
         breaker._onFailure();
       }
 
