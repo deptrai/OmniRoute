@@ -99,6 +99,15 @@ export const LMARENA_DIRECT_MODEL_ENTRIES: readonly LmarenaDirectModelEntry[] = 
     category: "Text",
   },
   {
+    catalogId: "gemini-3.8-flash",
+    arenaId: "92e16f88-3edf-419f-acc7-699eb899beed",
+    publicName: "gemini-3.8-flash",
+    displayName: "gemini-3.8-flash",
+    organization: "google",
+    vision: true,
+    category: "Text",
+  },
+  {
     catalogId: "significant-otter",
     arenaId: "019d2cd3-2641-7628-94bd-67ecb0a7134e",
     publicName: "significant-otter",

@@ -6,6 +6,7 @@ import {
   CLAUDE_FABLE_5_1_PRICING,
   CLAUDE_OPUS_5_PRICING,
   GEMINI_3_7_FLASH_PROMO_PRICING,
+  GEMINI_3_8_FLASH_PROMO_PRICING,
   GPT_5_3_CODEX_PRICING,
   GPT_5_5_PRICING,
   GPT_5_6_LUNA_PRICING,
@@ -17,6 +18,14 @@ const ANTIGRAVITY_GEMINI_3_7_PRICING = {
   "gemini-3.7-flash-low": GEMINI_3_7_FLASH_PROMO_PRICING,
   "gemini-3.7-flash-medium": GEMINI_3_7_FLASH_PROMO_PRICING,
   "gemini-3.7-flash-high": GEMINI_3_7_FLASH_PROMO_PRICING,
+};
+
+const ANTIGRAVITY_GEMINI_3_8_PRICING = {
+  "gemini-3.8-flash": GEMINI_3_8_FLASH_PROMO_PRICING,
+  "gemini-3.8-flash-tiered": GEMINI_3_8_FLASH_PROMO_PRICING,
+  "gemini-3.8-flash-low": GEMINI_3_8_FLASH_PROMO_PRICING,
+  "gemini-3.8-flash-medium": GEMINI_3_8_FLASH_PROMO_PRICING,
+  "gemini-3.8-flash-high": GEMINI_3_8_FLASH_PROMO_PRICING,
 };
 
 export const DEFAULT_PRICING_OAUTH = {
@@ -316,8 +325,14 @@ export const DEFAULT_PRICING_OAUTH = {
       cache_creation: 0.5,
     },
   },
-  antigravity: ANTIGRAVITY_GEMINI_3_7_PRICING,
-  agy: ANTIGRAVITY_GEMINI_3_7_PRICING,
+  antigravity: {
+    ...ANTIGRAVITY_GEMINI_3_7_PRICING,
+    ...ANTIGRAVITY_GEMINI_3_8_PRICING,
+  },
+  agy: {
+    ...ANTIGRAVITY_GEMINI_3_7_PRICING,
+    ...ANTIGRAVITY_GEMINI_3_8_PRICING,
+  },
   gh: {
     "claude-opus-5": CLAUDE_OPUS_5_PRICING,
     "gpt-5": {
@@ -391,6 +406,7 @@ export const DEFAULT_PRICING_OAUTH = {
       cache_creation: 0.5,
     },
     "gemini-3.7-flash": GEMINI_3_7_FLASH_PROMO_PRICING,
+    ...ANTIGRAVITY_GEMINI_3_8_PRICING,
     "gemini-2.5-pro": {
       input: 2.0,
       output: 12.0,

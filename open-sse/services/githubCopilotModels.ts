@@ -41,6 +41,7 @@ export const GITHUB_COPILOT_STATIC_FALLBACK_MODELS = [
   "claude-haiku-4.5",
   "gemini-3.1-pro-preview",
   "gemini-3.7-flash",
+  "gemini-3.8-flash",
   "gemini-3.6-flash",
   "gemini-3.5-flash",
   "gpt-5.6-sol",

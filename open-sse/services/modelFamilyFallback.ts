@@ -78,6 +78,29 @@ const FAMILY_FALLBACK_TEMPLATES: Record<string, readonly string[]> = {
   "gemini-2.5-pro": ["gemini-2.5-pro-preview-06-05", "gemini-2.5-pro-exp-03-25"],
   "gemini-2.5-pro-preview-06-05": ["gemini-2.5-pro", "gemini-2.5-pro-exp-03-25"],
 
+  // Gemini 3.8 Flash family
+  "gemini-3.8-flash": [
+    "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+  ],
+  "gemini-3.8-flash-high": [
+    "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+  ],
+  "gemini-3.8-flash-medium": [
+    "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-low",
+  ],
+  "gemini-3.8-flash-low": [
+    "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-high",
+  ],
+
   // Claude Mythos family — prefer the previous Fable before falling to Opus
   // tiers and then the cheaper Sonnet, matching the flagship ordering.
   "claude-fable-5-1": ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"],

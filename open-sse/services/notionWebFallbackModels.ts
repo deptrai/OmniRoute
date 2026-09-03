@@ -73,6 +73,13 @@ export const NOTION_WEB_FALLBACK_MODELS: NotionDiscoveredModel[] = [
     notionCodename: "grapefruit-zeppole",
   },
   {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    owned_by: "gemini",
+    supportsReasoning: true,
+    notionCodename: "honey-zeppole",
+  },
+  {
     id: "gemini-3.1-pro",
     name: "Gemini 3.1 Pro",
     owned_by: "gemini",

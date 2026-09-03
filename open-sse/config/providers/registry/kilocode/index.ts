@@ -33,6 +33,7 @@ export const kilocodeProvider: RegistryEntry = {
     { id: "anthropic/claude-haiku-4.5", name: "Claude Haiku 4.5" },
     { id: "google/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
     { id: "google/gemini-3.7-flash", name: "Gemini 3.7 Flash" },
+    { id: "google/gemini-3.8-flash", name: "Gemini 3.8 Flash" },
     { id: "google/gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite" },
     { id: "qwen/qwen3.8-max", name: "Qwen3.8 Max" },
     { id: "qwen/qwen3.7-plus", name: "Qwen3.7 Plus" },
