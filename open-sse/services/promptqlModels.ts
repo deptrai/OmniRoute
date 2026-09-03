@@ -70,6 +70,13 @@ export const PROMPTQL_FALLBACK_MODELS: PromptQlModel[] = [
     supportsVision: true,
   },
   {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    configId: "53dfc638-3770-425c-b0be-b132d93163ce",
+    modelId: "google/gemini-3.8-flash",
+    supportsVision: true,
+  },
+  {
     id: "gpt-5.6-sol",
     name: "GPT-5.6 Sol",
     configId: "4914e63d-ea29-45dc-9a85-c367b1ad0be5",

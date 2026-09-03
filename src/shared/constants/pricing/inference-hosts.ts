@@ -148,6 +148,13 @@ export const DEFAULT_PRICING_INFERENCE = {
       reasoning: 2.625,
       cache_creation: 0.017708,
     },
+    "gemini-3.8-flash": {
+      input: 0.75,
+      output: 3.75,
+      cached: 0.075,
+      reasoning: 3.75,
+      cache_creation: 0.75,
+    },
     "gemini-3-flash-preview": {
       input: 0.35,
       output: 2.1,
@@ -238,6 +245,13 @@ export const DEFAULT_PRICING_INFERENCE = {
   },
   orcarouter: {
     "google/gemini-3.6-flash": {
+      input: 1.5,
+      output: 7.5,
+      cached: 0.15,
+      reasoning: 7.5,
+      cache_creation: 1.5,
+    },
+    "google/gemini-3.8-flash": {
       input: 1.5,
       output: 7.5,
       cached: 0.15,

@@ -18,9 +18,11 @@ test("(#3696) non-tiered ANTIGRAVITY_PUBLIC_MODELS entries resolve to distinct u
   const seen = new Map<string, string>();
   const collisions: string[] = [];
   for (const model of ANTIGRAVITY_PUBLIC_MODELS) {
-    // Gemini 3.7 Flash tiers intentionally share the upstream `gemini-3.7-flash-tiered`
-    // endpoint with different reasoning token budgets.
-    if (model.id.startsWith("gemini-3.7-flash")) continue;
+    // Gemini 3.7 and 3.8 Flash tiers intentionally share the upstream
+    // `gemini-3.7-flash-tiered` / `gemini-3.8-flash-tiered` endpoint with
+    // different reasoning token budgets.
+    if (model.id.startsWith("gemini-3.7-flash") || model.id.startsWith("gemini-3.8-flash"))
+      continue;
     const upstream = resolveAntigravityModelId(model.id);
     if (seen.has(upstream)) {
       collisions.push(`${model.id} and ${seen.get(upstream)} both resolve to "${upstream}"`);

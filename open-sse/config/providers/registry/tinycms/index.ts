@@ -30,6 +30,7 @@ export const tinycmsProvider: RegistryEntry = {
     { id: "gpt-5.3-free", name: "GPT 5.3 Free (Multimodal/Vision)" },
     { id: "gpt-oss-120b", name: "GPT-OSS 120B" },
     { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash" },
+    { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
     { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
     { id: "gemini-3.1-flash-lite-preview", name: "Gemini 3.1 Flash Lite" },
     { id: "grok-4.5", name: "Grok 4.5" },

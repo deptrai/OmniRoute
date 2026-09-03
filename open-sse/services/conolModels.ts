@@ -68,6 +68,7 @@ const FALLBACK_MODEL_SEEDS: FallbackModelSeed[] = [
   { id: "minimax/minimax-m3", vision: true, efforts: EFFORTS_STANDARD },
   { id: "stepfun/step-3.7-flash", vision: true, efforts: EFFORTS_STANDARD },
   { id: "google/gemini-3.7-flash", vision: true, efforts: EFFORTS_STANDARD },
+  { id: "google/gemini-3.8-flash", vision: true, efforts: EFFORTS_STANDARD },
   { id: "google/gemini-3.1-pro-preview", vision: true, efforts: EFFORTS_STANDARD },
   { id: "google/gemini-3.1-flash-lite", vision: true, efforts: EFFORTS_STANDARD },
   { id: "x-ai/grok-4.3", vision: true, efforts: EFFORTS_STANDARD },
@@ -78,7 +79,7 @@ const FALLBACK_MODEL_SEEDS: FallbackModelSeed[] = [
 
 /** Presets exposed by the web client's model picker (id → text/multimodal model). */
 export const CONOL_FALLBACK_MODEL_PRESETS: ConolModelPreset[] = [
-  { id: "flash", text: "deepseek/deepseek-v4-flash", multimodal: "google/gemini-3.7-flash" },
+  { id: "flash", text: "deepseek/deepseek-v4-flash", multimodal: "google/gemini-3.8-flash" },
   { id: "moderate", text: "deepseek/deepseek-v4-pro", multimodal: "claude-sonnet-5" },
   { id: "pro", text: "z-ai/glm-5.2", multimodal: "moonshotai/kimi-k3" },
   { id: "ultra", text: "claude-fable-5", multimodal: "claude-fable-5" },
