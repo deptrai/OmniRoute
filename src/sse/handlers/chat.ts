@@ -1962,9 +1962,6 @@ async function handleSingleModelChat(
         throw error;
       }
       if (telemetry) telemetry.endPhase();
-      if ("localResourcePressureResult" in execution) {
-        return execution.localResourcePressureResult.response;
-      }
       const { result, tlsFingerprintUsed } = execution;
       if (!result.success) releaseOAuthSession();
 
@@ -2030,6 +2027,12 @@ async function handleSingleModelChat(
       if (isAntigravityMissingProjectError(provider, result)) {
         markAntigravityMissingCloudCodeProject(credentials.connectionId);
         return withSelectedConnectionHeader(result.response, credentials.connectionId);
+      }
+
+      // Local resource pressure is not an upstream account failure — surface the
+      // 503 response immediately without cooling down a healthy connection.
+      if (result.errorCode === "resource_pressure" || result.errorType === "resource_pressure") {
+        return withSelectedConnectionHeader(result.response, credentials?.connectionId);
       }
 
       const isAntigravityStreamReadinessFailure =

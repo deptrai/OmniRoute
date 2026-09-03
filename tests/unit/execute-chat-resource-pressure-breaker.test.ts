@@ -126,11 +126,15 @@ test("executeChatWithBreaker returns typed pressure 503 before normal, bypass, a
   const pressureResponses: Response[] = [];
   for (const execution of executions) {
     assert.equal(execution.tlsFingerprintUsed, false);
-    if (!("localResourcePressureResult" in execution)) {
+    if (
+      !("result" in execution) ||
+      execution.result?.errorCode !== "resource_pressure" ||
+      execution.result?.errorType !== "resource_pressure"
+    ) {
       assert.fail("provider execution result escaped the local pressure guard");
     }
-    assert.equal(execution.localResourcePressureResult.response.status, 503);
-    pressureResponses.push(execution.localResourcePressureResult.response);
+    assert.equal(execution.result.status, 503);
+    pressureResponses.push(execution.result.response);
   }
   const payload = await pressureResponses[0].json();
   assert.equal(payload.error.code, "resource_pressure");
