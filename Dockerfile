@@ -112,8 +112,11 @@ RUN test -f package-lock.json \
 # `console.warn`s and exits 0 — so a rate-limited or offline build would
 # otherwise succeed silently with an empty bin/ and only fail at first request
 # in production (TlsClientUnavailableError, #7802). Run it explicitly here so
-# a broken/rate-limited fetch fails the BUILD loudly instead of shipping a
-# broken image.
+# Pin the tls-client native library version. The upstream "latest" tag can
+# point to a release whose Linux asset is not yet published, causing the
+# postinstall fetch to fail the build. 1.15.1 is a known-good release that
+# ships tls-client-linux-ubuntu-amd64-1.15.1.so.
+ARG TLS_CLIENT_VERSION=1.15.1
 RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
   npm ci --include=optional --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
   && (cd node_modules/better-sqlite3 \
@@ -217,13 +220,13 @@ LABEL org.opencontainers.image.title="omniroute" \
 ENV NODE_ENV=production
 ENV PORT=20128
 ENV HOSTNAME=0.0.0.0
-# Runtime heap ceiling. 1024MB is enough for normal traffic but can be tight
-# for large fusion-combo panels (many models fanned out in parallel, each
-# response buffered in full — see open-sse/services/fusion.ts::FUSION_DEFAULTS
+# Runtime heap ceiling. 4096MB is a safer default for production traffic with
+# large fusion-combo panels (many models fanned out in parallel, each response
+# buffered in full — see open-sse/services/fusion.ts::FUSION_DEFAULTS
 # .maxPanel, issue #1905). Override at `docker run` time with
-# `-e OMNIROUTE_MEMORY_MB=2048` (or higher) if you raise fusionTuning.maxPanel
+# `-e OMNIROUTE_MEMORY_MB=4096` (or higher) if you raise fusionTuning.maxPanel
 # above the default cap.
-ENV OMNIROUTE_MEMORY_MB=1024
+ENV OMNIROUTE_MEMORY_MB=4096
 ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_MEMORY_MB}"
 
 # Data directory inside Docker — must match the volume mount in docker-compose.yml
