@@ -108,6 +108,12 @@ export const gheCopilotProvider: RegistryEntry = {
       maxOutputTokens: 64000,
     },
     {
+      id: "gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+      contextLength: 1000000,
+      maxOutputTokens: 64000,
+    },
+    {
       id: "gpt-5.6-sol",
       name: "GPT-5.6 Sol",
       targetFormat: "openai-responses",

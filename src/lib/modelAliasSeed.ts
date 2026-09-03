@@ -6,6 +6,7 @@ export const DEFAULT_MODEL_ALIAS_SEED = Object.freeze({
   "claude-sonnet-4-6": "agy/claude-sonnet-4-6",
   "claude-opus-4-6-thinking": "agy/claude-opus-4-6-thinking",
   "gemini-3.6-flash-low": "agy/gemini-3.6-flash-low",
+  "gemini-3.8-flash-low": "agy/gemini-3.8-flash-low",
 });
 
 // Remove only aliases that still match a default value previously shipped by OmniRoute.

@@ -31,6 +31,7 @@ export const raycastProvider: RegistryEntry = {
     //Gemini
     { id: "google-gemini-3.1-pro", name: "Gemini 3.1 Pro" },
     { id: "google-gemini-3.7-flash", name: "Gemini 3.7 Flash" },
+    { id: "google-gemini-3.8-flash", name: "Gemini 3.8 Flash" },
     { id: "google-gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite" },
     //Perplexity
     { id: "perplexity-sonar-reasoning-pro", name: "Sonar Reasoning Pro" },

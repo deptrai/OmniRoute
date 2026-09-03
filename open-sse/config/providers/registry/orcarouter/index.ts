@@ -44,6 +44,15 @@ export const orcarouterProvider: RegistryEntry = {
       maxOutputTokens: 65536,
     },
     {
+      id: "google/gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+      toolCalling: true,
+      supportsReasoning: true,
+      supportsVision: true,
+      contextLength: 1048576,
+      maxOutputTokens: 65536,
+    },
+    {
       id: "anthropic/claude-opus-4.8",
       name: "Claude Opus 4.8",
       toolCalling: true,

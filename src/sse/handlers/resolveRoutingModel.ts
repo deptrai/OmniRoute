@@ -71,7 +71,7 @@ export function isSubagentRequest(
 /**
  * Resolve the routing model for subagent requests.
  * When a subagent is detected, route to the default subagent model
- * (antigravity/gemini-3.7-flash or SUBAGENT_DEFAULT_MODEL).
+ * (antigravity/gemini-3.8-flash or SUBAGENT_DEFAULT_MODEL).
  */
 export function resolveSubagentRoutingModel(
   requestedModel: string | null | undefined,

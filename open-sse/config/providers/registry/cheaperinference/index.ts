@@ -129,6 +129,13 @@ export const CHEAPERINFERENCE_MODELS: RegistryModel[] = [
     toolCalling: true,
   },
   {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    supportsVision: true,
+    supportsReasoning: true,
+    toolCalling: true,
+  },
+  {
     id: "gemini-3-flash-preview",
     name: "Gemini 3 Flash Preview",
     supportsVision: true,
