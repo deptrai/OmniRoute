@@ -268,6 +268,14 @@ export const DEFAULT_PRICING_FRONTIER = {
       reasoning: 0.6,
       cache_creation: 0.1,
     },
+    // Gemini 3.8 Flash (released 2026-08-28) - introductory pricing.
+    "gemini-3.8-flash": {
+      input: 0.75,
+      output: 3.75,
+      cached: 0.075,
+      reasoning: 3.75,
+      cache_creation: 0.75,
+    },
   },
   deepseek: {
     "deepseek-chat": {

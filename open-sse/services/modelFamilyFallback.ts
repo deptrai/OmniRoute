@@ -87,6 +87,29 @@ const MODEL_FAMILIES: Record<string, string[]> = {
   "claude-sonnet-4-6": ["claude-sonnet-4-5-20250929", "claude-sonnet-4-20250514"],
   "claude-sonnet-4-5-20250929": ["claude-sonnet-4-6", "claude-sonnet-4-20250514"],
 
+  // Gemini 3.8 Flash family
+  "gemini-3.8-flash": [
+    "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+  ],
+  "gemini-3.8-flash-high": [
+    "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+  ],
+  "gemini-3.8-flash-medium": [
+    "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-low",
+  ],
+  "gemini-3.8-flash-low": [
+    "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-high",
+  ],
+
   // GPT-5 family
   "gpt-5": ["gpt-5-mini", "gpt-4o"],
   "gpt-5.1": ["gpt-5.1-mini", "gpt-5", "gpt-4o"],

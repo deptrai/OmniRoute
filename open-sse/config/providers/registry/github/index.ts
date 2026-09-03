@@ -87,6 +87,7 @@ export const githubProvider: RegistryEntry = {
     // #2911: Gemini on Copilot must use chat/completions, not the Responses API.
     { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
     { id: "gemini-3-flash-preview", name: "Gemini 3 Flash" },
+    { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
     { id: "oswe-vscode-prime", name: "Raptor Mini", targetFormat: "openai-responses" },
     //{ id: "?", name: "Goldeneye" },
   ],

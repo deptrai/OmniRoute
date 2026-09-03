@@ -35,6 +35,7 @@ export const kilocodeProvider: RegistryEntry = {
     { id: "google/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
     { id: "google/gemini-3-flash-preview", name: "Gemini 3 Flash" },
     { id: "google/gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite" },
+    { id: "google/gemini-3.8-flash", name: "Gemini 3.8 Flash" },
     { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", supportsReasoning: true },
     { id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", supportsReasoning: true },
     { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6" },

@@ -11,6 +11,7 @@ export interface ModelSpec {
   thinkingBudgetCap?: number;
   thinkingOverhead?: number; // buffer de tokens para thinking
   adaptiveMaxTokens?: number; // tokens disponíveis para output quando thinking ativo
+  defaultReasoningEffort?: string; // esforço de raciocínio padrão (low/medium/high)
   aliases?: string[]; // IDs alternativos para este modelo
   supportsThinking?: boolean;
   supportsTools?: boolean;
@@ -176,6 +177,58 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     maxOutputTokens: 65536,
     contextWindow: 1048576,
     supportsThinking: false,
+    supportsTools: true,
+    supportsVision: true,
+  },
+
+  // ── Gemini 3.8 Flash ─────────────────────────────────────────────
+  // Long-horizon software-engineering model. 1M context, 64K output,
+  // tunable thinking levels (low/medium/high). Introductory pricing
+  // $0.75/$3.75 per 1M tokens through end of 2026.
+  "gemini-3.8-flash-high": {
+    maxOutputTokens: 65536,
+    contextWindow: 1048576,
+    defaultThinkingBudget: 24576,
+    thinkingBudgetCap: 24576,
+    supportsThinking: true,
+    supportsTools: true,
+    supportsVision: true,
+  },
+  "gemini-3.8-flash-medium": {
+    maxOutputTokens: 65536,
+    contextWindow: 1048576,
+    defaultThinkingBudget: 8192,
+    thinkingBudgetCap: 24576,
+    supportsThinking: true,
+    supportsTools: true,
+    supportsVision: true,
+  },
+  "gemini-3.8-flash-low": {
+    maxOutputTokens: 65536,
+    contextWindow: 1048576,
+    defaultThinkingBudget: 1024,
+    thinkingBudgetCap: 24576,
+    supportsThinking: true,
+    supportsTools: true,
+    supportsVision: true,
+  },
+  "gemini-3.8-flash": {
+    maxOutputTokens: 65536,
+    contextWindow: 1048576,
+    defaultThinkingBudget: 8192,
+    thinkingBudgetCap: 24576,
+    defaultReasoningEffort: "medium",
+    supportsThinking: true,
+    supportsTools: true,
+    supportsVision: true,
+    aliases: ["gemini-3.8-flash-tiered"],
+  },
+  "gemini-3.8-flash-tiered": {
+    maxOutputTokens: 65536,
+    contextWindow: 1048576,
+    defaultThinkingBudget: 8192,
+    thinkingBudgetCap: 24576,
+    supportsThinking: true,
     supportsTools: true,
     supportsVision: true,
   },

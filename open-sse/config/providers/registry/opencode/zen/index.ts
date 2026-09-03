@@ -57,6 +57,7 @@ export const opencode_zenProvider: RegistryEntry = {
     { id: "gemini-3-flash", name: "Gemini 3 Flash" },
     { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro" },
     { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
+    { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
 
     // ── Grok ───────────────────────────────────────────────────
     { id: "grok-build-0.1", name: "Grok Build 0.1" },

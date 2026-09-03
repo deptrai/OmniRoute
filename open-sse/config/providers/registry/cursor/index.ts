@@ -104,6 +104,8 @@ export const cursorProvider: RegistryEntry = {
     //
     { id: "gemini-3-flash", name: "Gemini 3 Flash" },
     //
+    { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+    //
     { id: "grok-4.3", name: "Grok 4.3" },
     //
     { id: "kimi-k2.5", name: "Kimi K2.5" },

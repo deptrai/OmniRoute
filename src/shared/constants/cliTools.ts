@@ -220,11 +220,27 @@ export const CLI_TOOLS: Record<string, CliCatalogEntry> = {
       "gpt-oss-120b-medium",
       "gemini-3.1-pro-high",
       "gemini-3.1-pro-low",
+      "gemini-3.8-flash",
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low",
     ],
     defaultModels: [
       { id: "gemini-3.1-pro-high", name: "Gemini 3.1 Pro High", alias: "gemini-3.1-pro-high" },
       { id: "gemini-3.1-pro-low", name: "Gemini 3.1 Pro Low", alias: "gemini-3.1-pro-low" },
       { id: "gemini-3-flash", name: "Gemini 3 Flash", alias: "gemini-3-flash" },
+      { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash", alias: "gemini-3.8-flash" },
+      {
+        id: "gemini-3.8-flash-high",
+        name: "Gemini 3.8 Flash (High)",
+        alias: "gemini-3.8-flash-high",
+      },
+      {
+        id: "gemini-3.8-flash-medium",
+        name: "Gemini 3.8 Flash (Medium)",
+        alias: "gemini-3.8-flash-medium",
+      },
+      { id: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)", alias: "gemini-3.8-flash-low" },
       {
         id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",

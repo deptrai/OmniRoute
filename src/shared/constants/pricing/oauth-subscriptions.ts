@@ -375,6 +375,44 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 7.5,
       cache_creation: 1.5,
     },
+    // Gemini 3.8 Flash (released 2026-08-28) - tunable thinking tiers.
+    // Introductory pricing: $0.75 input / $3.75 output / $0.075 cached per MTok
+    // through 2026-12-31; reasoning billed at output rate.
+    "gemini-3.8-flash": {
+      input: 0.75,
+      output: 3.75,
+      cached: 0.075,
+      reasoning: 3.75,
+      cache_creation: 0.75,
+    },
+    "gemini-3.8-flash-tiered": {
+      input: 0.75,
+      output: 3.75,
+      cached: 0.075,
+      reasoning: 3.75,
+      cache_creation: 0.75,
+    },
+    "gemini-3.8-flash-low": {
+      input: 0.75,
+      output: 3.75,
+      cached: 0.075,
+      reasoning: 3.75,
+      cache_creation: 0.75,
+    },
+    "gemini-3.8-flash-medium": {
+      input: 0.75,
+      output: 3.75,
+      cached: 0.075,
+      reasoning: 3.75,
+      cache_creation: 0.75,
+    },
+    "gemini-3.8-flash-high": {
+      input: 0.75,
+      output: 3.75,
+      cached: 0.075,
+      reasoning: 3.75,
+      cache_creation: 0.75,
+    },
     // `gemini-pro-agent` is the Antigravity v1.23+ Agent-mode alias for the
     // Gemini 3.1 Pro (High) tier — bills at the same rates as `gemini-3.1-pro-high`.
     "gemini-pro-agent": {

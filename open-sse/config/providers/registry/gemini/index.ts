@@ -59,5 +59,33 @@ export const geminiProvider: RegistryEntry = {
       toolCalling: true,
       supportsVision: true,
     },
+    {
+      id: "gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+      toolCalling: true,
+      supportsVision: true,
+      supportsReasoning: true,
+    },
+    {
+      id: "gemini-3.8-flash-high",
+      name: "Gemini 3.8 Flash (High)",
+      toolCalling: true,
+      supportsVision: true,
+      supportsReasoning: true,
+    },
+    {
+      id: "gemini-3.8-flash-medium",
+      name: "Gemini 3.8 Flash (Medium)",
+      toolCalling: true,
+      supportsVision: true,
+      supportsReasoning: true,
+    },
+    {
+      id: "gemini-3.8-flash-low",
+      name: "Gemini 3.8 Flash (Low)",
+      toolCalling: true,
+      supportsVision: true,
+      supportsReasoning: true,
+    },
   ],
 };
