@@ -1312,6 +1312,12 @@ async function handleSingleModelChat(
         return result.response;
       }
 
+      // Local resource pressure is not an upstream account failure — surface the
+      // 503 response immediately without cooling down a healthy connection.
+      if (result.errorCode === "resource_pressure" || result.errorType === "resource_pressure") {
+        return withSelectedConnectionHeader(result.response, credentials?.connectionId);
+      }
+
       const isAntigravityStreamReadinessFailure =
         provider === "antigravity" &&
         (result.errorCode === "STREAM_READINESS_TIMEOUT" ||

@@ -63,9 +63,10 @@ type ExecuteChatWithBreakerOptions = {
   [key: string]: any;
 };
 
-type ExecuteChatWithBreakerResult =
-  | { result: any; tlsFingerprintUsed: boolean }
-  | { localResourcePressureResult: ResourcePressureGuardResult; tlsFingerprintUsed: false };
+type ExecuteChatWithBreakerResult = {
+  result: any;
+  tlsFingerprintUsed: boolean;
+};
 
 function getHeaderValue(headers: Record<string, unknown> | null | undefined, name: string) {
   if (!headers || typeof headers !== "object") return "";
@@ -441,7 +442,14 @@ export async function executeChatWithBreaker({
 
   const pressureGuard = checkResourcePressureBeforeProviderWork();
   if (pressureGuard) {
-    return { localResourcePressureResult: pressureGuard, tlsFingerprintUsed: false };
+    return {
+      result: {
+        ...pressureGuard,
+        errorCode: "resource_pressure",
+        errorType: "resource_pressure",
+      },
+      tlsFingerprintUsed: false,
+    };
   }
 
   try {
