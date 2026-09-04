@@ -132,7 +132,10 @@ import {
   recordStickyWeightedSuccess,
 } from "./combo/rrState.ts";
 import { validateResponseQuality, toRetryAfterDisplayValue } from "./combo/validateQuality.ts";
-import { resolveComboCooldownWaitDecision } from "./combo/comboCooldownRetry.ts";
+import {
+  resolveComboCooldownWaitDecision,
+  resolveCircuitOpenWaitDecision,
+} from "./combo/comboCooldownRetry.ts";
 import {
   computeClosestRetryAfter,
   waitForCooldownAwareRetry,
@@ -1744,12 +1747,18 @@ export async function handleComboChat({
     strategy === "quota-share" && resilienceSettings.quotaShareConcurrencyLimit.enabled;
 
   const dispatchWithCooldownRetry = async (): Promise<Response> => {
+    // Declared outside the setTry loop so the circuit-open wait decision after
+    // the final attempt can still see whether every target was breaker-skipped.
+    let skippedForCircuitOpen = false;
+    let earliestCircuitOpenRetryMs = 0;
     for (let setTry = 0; setTry <= maxSetRetries; setTry++) {
       // #1731: Per-set-iteration set of providers whose quota is fully exhausted.
       // Reset each retry so providers excluded in a previous attempt get another chance.
       const exhaustedProviders = new Set<string>();
       const exhaustedConnections = new Set<string>();
       const transientRateLimitedProviders = new Set<string>();
+      skippedForCircuitOpen = false;
+      earliestCircuitOpenRetryMs = 0;
       if (setTry > 0) {
         log.info("COMBO", `All targets failed — retrying set (${setTry}/${maxSetRetries})`);
         await new Promise((resolve) => {
@@ -1794,7 +1803,15 @@ export async function handleComboChat({
         const provider = target.provider;
 
         const cb = getCircuitBreaker(provider);
-        if (cb.getStatus().state === "OPEN") {
+        const cbStatus = cb.getStatus();
+        if (cbStatus.state === "OPEN") {
+          skippedForCircuitOpen = true;
+          if (
+            cbStatus.retryAfterMs > 0 &&
+            (earliestCircuitOpenRetryMs === 0 || cbStatus.retryAfterMs < earliestCircuitOpenRetryMs)
+          ) {
+            earliestCircuitOpenRetryMs = cbStatus.retryAfterMs;
+          }
           log.info("COMBO", `Skipping ${modelStr} — circuit breaker OPEN for ${provider}`);
           if (i > 0) fallbackCount++;
           return null;
@@ -2723,6 +2740,32 @@ export async function handleComboChat({
 
       // Retry the entire set if more attempts remain
       if (setTry < maxSetRetries) continue;
+
+      if (!lastStatus && recordedAttempts === 0 && comboCooldownWaitEnabled) {
+        const circuitOpenWait = resolveCircuitOpenWaitDecision({
+          skippedForCircuitOpen,
+          retryAfterMs: earliestCircuitOpenRetryMs,
+          attempt: comboCooldownAttempt,
+          budgetLeftMs: comboCooldownBudgetLeftMs,
+          settings: resilienceSettings.comboCooldownWait,
+        });
+        if (circuitOpenWait.wait) {
+          log.info(
+            "COMBO",
+            `${strategy} circuit-open wait: waiting ${Math.ceil(circuitOpenWait.waitMs / 1000)}s (reason=${circuitOpenWait.reason ?? "circuit_open"}) then retrying (attempt ${comboCooldownAttempt + 1}/${resilienceSettings.comboCooldownWait.maxAttempts})`
+          );
+          const completed = await waitForCooldownAwareRetry(circuitOpenWait.waitMs, signal);
+          if (!completed) {
+            return errorResponse(499, "Request aborted");
+          }
+          comboCooldownAttempt += 1;
+          comboCooldownBudgetLeftMs = Math.max(
+            0,
+            comboCooldownBudgetLeftMs - circuitOpenWait.waitMs
+          );
+          return dispatchWithCooldownRetry();
+        }
+      }
 
       // All set retries exhausted — return the final error
       if (!lastStatus) {
