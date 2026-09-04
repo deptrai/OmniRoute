@@ -436,7 +436,7 @@ type ClaudeEmptyResponseLifecycle = {
   warningLogged: boolean;
 };
 
-const SYNTHETIC_CLAUDE_EMPTY_RESPONSE_TEXT = "";
+const SYNTHETIC_CLAUDE_EMPTY_RESPONSE_TEXT = " ";
 
 function createClaudeEmptyResponseLifecycle(): ClaudeEmptyResponseLifecycle {
   return {

@@ -337,6 +337,7 @@ export async function testOAuthConnection(
       valid: false,
       error,
       refreshed: false,
+      statusCode: 400,
       diagnosis: classifyFailure({ error, unsupported: true }),
     };
   }
