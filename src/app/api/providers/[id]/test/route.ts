@@ -431,6 +431,7 @@ export async function testOAuthConnection(
       valid: false,
       error,
       refreshed: false,
+      statusCode: 400,
       diagnosis: classifyFailure({ error, unsupported: true }),
     };
   }
@@ -1102,7 +1103,11 @@ export async function testSingleConnection(connectionId: string, validationModel
     lastError: clearErrorState ? null : result.valid ? connection.lastError : result.error,
     lastErrorAt: clearErrorState ? null : result.valid ? connection.lastErrorAt : now,
     lastTested: now,
-    lastErrorType: clearErrorState ? null : result.valid ? connection.lastErrorType : diagnosis.type,
+    lastErrorType: clearErrorState
+      ? null
+      : result.valid
+        ? connection.lastErrorType
+        : diagnosis.type,
     lastErrorSource: clearErrorState
       ? null
       : result.valid

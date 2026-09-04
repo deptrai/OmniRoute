@@ -8,7 +8,7 @@
 
 type HeaderCarrier = { headers: { get(name: string): string | null } };
 
-export const DEFAULT_SUBAGENT_MODEL = "claude-sonnet-5";
+export const DEFAULT_SUBAGENT_MODEL = "claude-haiku-4.5";
 
 /**
  * Detect whether the incoming request is issued by an autonomous subagent

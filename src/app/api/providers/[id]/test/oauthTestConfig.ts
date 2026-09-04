@@ -297,4 +297,10 @@ export const OAUTH_TEST_CONFIG: Record<string, OAuthTestConfigEntry> = {
     refreshable: true,
     acceptStatuses: [402],
   },
+  "custom-oauth-connection-proxy": {
+    // Pass-through OAuth proxy: no userinfo endpoint. Verify token presence
+    // and expiry; real connectivity is proven by live chat traffic.
+    checkExpiry: true,
+    refreshable: true,
+  },
 };
