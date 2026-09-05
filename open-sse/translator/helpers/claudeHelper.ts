@@ -362,6 +362,118 @@ function bodyHasAnyCacheControl(body: ClaudeRequestBody): boolean {
 // - Filter empty messages
 // - Add thinking block for Anthropic endpoint (provider === "claude")
 // - Fix tool_use/tool_result ordering
+/**
+ * Repair corrupted tool-call history before it is sent upstream.
+ *
+ * A transport/decoder bug (or a misbehaving upstream) can leave `tool_use`
+ * blocks with empty `input` (`{}`, "", "null") in the client's persisted
+ * history. Models then mimic the pattern and emit empty arguments on NEW
+ * calls, producing a self-reinforcing InputValidationError loop that survives
+ * long after the transport bug is fixed.
+ *
+ * A tool_use whose schema declares required params could never have succeeded
+ * with empty input — its tool_result is always a validation error — so the
+ * pair carries no useful signal. Drop both blocks (plus the matching
+ * tool_result in a later user turn) and the "(empty response)" placeholder
+ * text the proxy itself emits for tool-use-only responses.
+ *
+ * Tools not present in `tools` are left untouched (cannot verify `required`).
+ */
+export function sanitizeEmptyToolUseHistory(
+  messages: ClaudeMessage[] | undefined,
+  tools: ClaudeTool[] | undefined
+): ClaudeMessage[] | undefined {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+  if (!Array.isArray(tools) || tools.length === 0) return messages;
+
+  const requiredTools = new Set<string>();
+  for (const t of tools) {
+    if (typeof t?.name !== "string" || !t.name) continue;
+    // Claude shape: input_schema.required. OpenAI-shape (hybrid requests):
+    // function.parameters.required.
+    const schema =
+      (t as { input_schema?: { required?: unknown } }).input_schema ??
+      (t as { function?: { parameters?: { required?: unknown } } }).function?.parameters;
+    const required = schema?.required;
+    if (Array.isArray(required) && required.length > 0) requiredTools.add(t.name);
+    // OpenAI-shaped tools carry the name under function.name.
+    const fn = (t as { function?: { name?: unknown; parameters?: { required?: unknown } } })
+      .function;
+    if (
+      typeof fn?.name === "string" &&
+      fn.name &&
+      Array.isArray(fn.parameters?.required) &&
+      fn.parameters.required.length > 0
+    ) {
+      requiredTools.add(fn.name);
+    }
+  }
+  if (requiredTools.size === 0) return messages;
+
+  const isEmptyInput = (input: unknown): boolean => {
+    if (input === undefined || input === null) return true;
+    if (typeof input === "string") {
+      const s = input.trim();
+      return s === "" || s === "{}" || s === "null";
+    }
+    return (
+      typeof input === "object" &&
+      !Array.isArray(input) &&
+      Object.keys(input as Record<string, unknown>).length === 0
+    );
+  };
+
+  const droppedIds = new Set<string>();
+  let changed = false;
+  const out: ClaudeMessage[] = [];
+
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+    const content = msg.content.filter((b) => {
+      if (!b || typeof b !== "object") return true;
+      if (
+        b.type === "tool_use" &&
+        typeof b.id === "string" &&
+        b.id.length > 0 &&
+        typeof b.name === "string" &&
+        requiredTools.has(b.name) &&
+        isEmptyInput(b.input)
+      ) {
+        droppedIds.add(b.id);
+        changed = true;
+        return false;
+      }
+      if (
+        b.type === "tool_result" &&
+        typeof b.tool_use_id === "string" &&
+        droppedIds.has(b.tool_use_id)
+      ) {
+        changed = true;
+        return false;
+      }
+      if (b.type === "text" && b.text === "(empty response)") {
+        changed = true;
+        return false;
+      }
+      return true;
+    });
+    if (content.length === 0) {
+      changed = true;
+      continue;
+    }
+    if (content.length !== msg.content.length) {
+      out.push({ ...msg, content });
+    } else {
+      out.push(msg);
+    }
+  }
+
+  return changed ? out : messages;
+}
+
 export function prepareClaudeRequest(
   body: ClaudeRequestBody,
   provider: string | null = null,

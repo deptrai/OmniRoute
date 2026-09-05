@@ -7,6 +7,7 @@ import {
 import {
   NON_ANTHROPIC_THINKING_PLACEHOLDER,
   prepareClaudeRequest,
+  sanitizeEmptyToolUseHistory,
 } from "./helpers/claudeHelper.ts";
 import { filterToOpenAIFormat } from "./helpers/openaiHelper.ts";
 import {
@@ -350,6 +351,16 @@ export function translateRequest(
   // Explicit reasoning-routing policies are final. The marker is internal and is
   // consumed here before any provider translation can see it.
   result = applyReasoningRuleDirective(result);
+
+  // Repair histories poisoned by empty tool_use blocks (lost arguments):
+  // dropping the never-succeedable call+error pair keeps the model from
+  // mimicking the empty-arguments pattern on subsequent turns.
+  if (sourceFormat === FORMATS.CLAUDE && result && Array.isArray(result.messages)) {
+    const cleaned = sanitizeEmptyToolUseHistory(result.messages, result.tools);
+    if (cleaned && cleaned !== result.messages) {
+      result = { ...result, messages: cleaned };
+    }
+  }
 
   // Normalize thinking config: remove if lastMessage is not user
   normalizeThinkingConfig(result);
