@@ -409,7 +409,7 @@ export function openaiToClaudeResponse(chunk, state) {
         state._markdownFenceRun || 0,
         state._markdownFenceOpening === true,
         state._markdownFenceClosingRun || 0,
-        state._markdownLineIndent || 0,
+        state._markdownLineIndent || 0
       );
       state._markdownBuffer = textToHold;
       state._markdownCodeSpanRun = backtickRun || 0;
@@ -553,6 +553,36 @@ export function openaiToClaudeResponse(chunk, state) {
     state.claudeFinishEmitted = true;
     stopThinkingBlock(state, results);
     stopTextBlock(state, results);
+
+    // If any tool call's accumulated arguments are not valid JSON, the upstream
+    // stream was truncated mid-call (observed: Devin Connect streams ending
+    // during argument deltas — client then logged InputValidationError and the
+    // model retried with hallucinated stub args like {"command":…,"len":N}).
+    // Closing the block normally would hand the client unparseable
+    // partial_json that may validate-fail or, worse, execute a truncated
+    // command. Emit a terminal error instead so the turn is retried.
+    // Shimmed tools are exempt — their shim repairs the buffer at close.
+    let truncatedArgs = false;
+    for (const [, toolInfo] of state.toolCalls) {
+      if (toolInfo.shimmed || !toolInfo.argBuffer) continue;
+      try {
+        JSON.parse(toolInfo.argBuffer);
+      } catch {
+        truncatedArgs = true;
+        break;
+      }
+    }
+    if (truncatedArgs) {
+      results.push({
+        type: "error",
+        error: {
+          type: "api_error",
+          message:
+            "Upstream stream truncated tool-call arguments — the response was cut mid-call; retry the turn",
+        },
+      });
+      return results;
+    }
 
     for (const [, toolInfo] of state.toolCalls) {
       // A tool call whose name/args never arrived (only an id chunk was seen)
