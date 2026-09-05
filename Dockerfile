@@ -263,7 +263,7 @@ USER node
 COPY --chmod=755 scripts/check-permissions.sh /app/check-permissions.sh
 ENTRYPOINT ["/app/check-permissions.sh"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=5 \
   CMD ["node", "healthcheck.mjs"]
 
 CMD ["node", "dev/run-standalone.mjs"]
