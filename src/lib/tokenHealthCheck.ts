@@ -284,64 +284,7 @@ export function buildTransientRefreshRetryUpdate(conn: any, now: string) {
   };
 }
 
-/**
- * Build a flat-retry update for a transient refresh failure (network timeout,
- * connection reset, DNS failure). Unlike buildRefreshFailureUpdate, this does
- * NOT increment the exponential streak -- transient errors should not
- * accumulate into a 4-hour backoff. Uses the longer of the existing backoff
- * and a flat 2-minute transient window: a longer permanent backoff (e.g. 4h
- * from exponential) is preserved to avoid prematurely shortening the circuit
- * breaker, while a shorter or absent backoff is extended to the transient
- * window.
- */
-export function buildTransientRefreshRetryUpdate(conn: any, now: string) {
-  const wasExpired = conn.testStatus === "expired";
-  const retryCount = (conn.expiredRetryCount ?? 0) + (wasExpired ? 1 : 0);
-  // Preserve existing streak from any prior permanent failures so a transient
-  // error does not reset the exponential backoff ladder.
-  // Guard: providerSpecificData may be a primitive or null - treat as empty.
-  const psd =
-    typeof conn.providerSpecificData === "object" && conn.providerSpecificData !== null
-      ? conn.providerSpecificData
-      : {};
-  const existingCircuit = psd.refreshCircuit;
-  const existingStreak = existingCircuit?.streak ?? 0;
-  const parsedExistingUntil = existingCircuit?.until
-    ? new Date(existingCircuit.until).getTime()
-    : 0;
-  // Guard against NaN from malformed date strings - treat as no existing backoff.
-  const existingUntil = Number.isFinite(parsedExistingUntil) ? parsedExistingUntil : 0;
-  const transientUntil = new Date(now).getTime() + TRANSIENT_REFRESH_RETRY_MIN * 60 * 1000;
-  // Use the longer of the two: preserve an existing permanent backoff
-  // (e.g. 4h from exponential) or extend to the transient window.
-  const useTransient = existingUntil <= transientUntil;
-  const until = useTransient
-    ? new Date(transientUntil).toISOString()
-    : (existingCircuit?.until ?? new Date(transientUntil).toISOString());
-  return {
-    lastHealthCheckAt: now,
-    testStatus: wasExpired ? "expired" : "active",
-    lastError: "Health check: token refresh transient error (network/timeout)",
-    lastErrorAt: now,
-    lastErrorType: "token_refresh_transient",
-    lastErrorSource: "oauth",
-    errorCode: "refresh_transient",
-    providerSpecificData: {
-      ...psd,
-      refreshCircuit: {
-        streak: existingStreak,
-        until,
-        lastFailAt: now,
-        // Always set the transient flag for observability. When the existing
-        // backoff is longer (useTransient=false), the transient error occurred
-        // but the permanent backoff was preserved - flag it as false so
-        // observers can distinguish this from a pure transient retry.
-        transient: useTransient,
-      },
-    },
-    ...(wasExpired ? { expiredRetryCount: retryCount, expiredRetryAt: now } : {}),
-  };
-}
+
 
 /**
  * Strip the refresh circuit breaker state from providerSpecificData after a

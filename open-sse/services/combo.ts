@@ -80,6 +80,7 @@ import {
   clearStickyBinding,
 } from "./combo/sessionStickiness.ts";
 import { getCachedProviderConnectionById } from "../../src/lib/db/readCache.ts";
+import { redactConnectionLabel } from "./combo/comboErrorAggregation.ts";
 import { selectQuotaShareTarget } from "./combo/quotaShareStrategy.ts";
 import {
   resolveMaxConcurrentByConnection,
@@ -1975,7 +1976,8 @@ export async function handleComboChat({
             );
             if (persistedRetrySkip) {
               log.info("COMBO", persistedRetrySkip);
-              return { ok: false, reason: "persisted_cooldown" };
+              if (i > 0) fallbackCount++;
+              return null;
             }
           }
 
