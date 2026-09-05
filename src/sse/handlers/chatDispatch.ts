@@ -64,8 +64,15 @@ export async function dispatchChatWithAffinityEviction(
   }
 
   // A resource-pressure short-circuit (no upstream dispatch happened) is not a
-  // combo per-model timeout — never treat it as one.
-  if ("localResourcePressureResult" in dispatched) return dispatched;
+  // combo per-model timeout — never treat it as one. executeChatWithBreaker now
+  // returns the guard result inside `result` (ee2af6fd6), so detect it via the
+  // typed error fields instead of the removed wrapper key.
+  if (
+    dispatched.result?.errorCode === "resource_pressure" ||
+    dispatched.result?.errorType === "resource_pressure"
+  ) {
+    return dispatched;
+  }
 
   if (!dispatched.result?.success) evict();
   return dispatched;

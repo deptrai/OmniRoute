@@ -16,6 +16,7 @@ let child = null;
 function startServer() {
   if (isShuttingDown) return;
 
+  fs.mkdirSync(dirname(logPath), { recursive: true });
   const logStream = fs.createWriteStream(logPath, { flags: "a" });
   console.log(`[Supervisor] Starting OmniRoute server via ${runNextPath}...`);
 

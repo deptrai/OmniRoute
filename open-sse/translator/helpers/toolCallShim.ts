@@ -146,16 +146,19 @@ function sanitizeAskUserQuestionArgs(args: Record<string, unknown>): void {
                 ? o.name
                 : JSON.stringify(o);
       const description = typeof o.description === "string" ? o.description : "";
-      return {
-        ...o,
-        label,
-        description,
-      };
+      // Emit only schema fields — remapped leftovers like `text`/`value`/`name`
+      // would be rejected as extra properties by strict validation.
+      return { label, description };
     }
     return { label: String(opt ?? ""), description: "" };
   };
 
   const normalizeQuestionObj = (q: unknown): Record<string, unknown> => {
+    if (Array.isArray(q)) {
+      // Some models emit question as a string[] — join rather than relying on
+      // String(q) which produces a comma-joined blob.
+      q = q.filter((s) => typeof s === "string" && s).join("\n");
+    }
     if (typeof q === "string") {
       return {
         header: "Question",
@@ -216,6 +219,12 @@ function sanitizeAskUserQuestionArgs(args: Record<string, unknown>): void {
             question: rawQuestion,
             options: rawOptions,
           });
+
+    // Options-only calls (no question text anywhere) would emit question:"" and
+    // fail strict validation — a generic prompt is better than a retry loop.
+    if (!rootQ.question && Array.isArray(rootQ.options) && rootQ.options.length > 0) {
+      rootQ.question = "Select an option";
+    }
 
     extractedQuestions.push(rootQ);
     delete args.question;

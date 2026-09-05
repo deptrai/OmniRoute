@@ -45,6 +45,16 @@ export function isRetryablePreOutputTransportError(
   const text = String(errorText || "");
   const numericStatus = Number(status);
   if (numericStatus === 429 || numericStatus === 401 || numericStatus === 400) return false;
+  // 403 is auth/permission — never retryable on its own. The single exception is
+  // Devin's known quirk where a transient internal error is mislabeled
+  // `permission_denied: internal error`; gate it explicitly instead of letting a
+  // generic 403 with retryable-looking text retry against a healthy account.
+  if (numericStatus === 403) return /permission_denied:.*internal error/i.test(text);
+  // Content-policy rejections are deterministic per payload — no account or
+  // retry can ever succeed with the same input.
+  if (/content policy|sensitive or unsafe content|content_policy_violation/i.test(text)) {
+    return false;
+  }
   if (/quota (threshold|exhausted)|credits exhausted/i.test(text)) return false;
   if (/invalid_request|prompt is too long|context.?length|unsupported model/i.test(text)) {
     return false;

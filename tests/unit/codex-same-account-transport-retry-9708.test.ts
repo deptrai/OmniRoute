@@ -107,7 +107,7 @@ test("#9708: quota, auth, and deterministic 400s never enter the same-account re
   );
 });
 
-test("#9708: same-account retry is bounded to exactly one attempt", () => {
+test("#9708: same-account retry is bounded to the configured max attempts", () => {
   assert.equal(
     shouldRetrySameAccountTransport({
       status: 503,
@@ -197,7 +197,7 @@ test("#9708: simulate first 503 then success on the same account; second failure
     { status: 507, error: "exceeded request buffer limit while retrying upstream" },
   ]);
   assert.equal(rotated.outcome, "fallback");
-  assert.equal(rotated.attempt, 1);
+  assert.equal(rotated.attempt, SAME_ACCOUNT_TRANSPORT_RETRY_MAX);
   assert.equal(rotated.markUnavailable, 1);
   assert.equal(rotated.connectionId, "acct-b");
 });

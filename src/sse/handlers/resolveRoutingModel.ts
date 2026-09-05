@@ -85,7 +85,7 @@ export function resolveSubagentRoutingModel(
 ): string | null | undefined {
   if (!isSubagent || !requestedModel) return requestedModel;
 
-  const targetModel = process.env.SUBAGENT_DEFAULT_MODEL || DEFAULT_SUBAGENT_MODEL;
+  const targetModel = process.env.SUBAGENT_DEFAULT_MODEL?.trim() || DEFAULT_SUBAGENT_MODEL;
   return targetModel;
 }
 

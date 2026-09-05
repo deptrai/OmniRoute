@@ -318,7 +318,12 @@ function convertMessages(messages: OpenAIMessage[]): {
   for (const message of messages) {
     const role = String(message.role || "user");
     const rawPrompt = messageText(message.content);
-    const prompt = sanitizeDevinPrompt(rawPrompt);
+    // Identity rewriting only applies to system-ish roles — that is where the
+    // Claude Code identity/disclaimer text lives. User, assistant and tool
+    // content must pass through verbatim so real conversation data is never
+    // rewritten by the sanitizer.
+    const prompt =
+      role === "system" || role === "developer" ? sanitizeDevinPrompt(rawPrompt) : rawPrompt;
     if (role === "system" || role === "developer") {
       if (prompt) systemParts.push(prompt);
       continue;
@@ -1039,6 +1044,12 @@ export class DevinDesktopExecutor extends BaseExecutor {
             for (const toolCall of response.toolCalls) {
               // Argument-only deltas arrive as separate proto messages with no
               // id/name — they continue the most recently started tool call.
+              // Known limitation: the wire format carries no per-call index on
+              // argument deltas, so if upstream ever interleaves argument
+              // deltas from two parallel tool calls there is no way to
+              // attribute them correctly. Observed Devin Desktop streams emit
+              // each call's deltas contiguously (id+name first, then argument
+              // fragments), so the most-recent-call heuristic is correct.
               const existingIndex = toolCall.id
                 ? toolCallIndexes.get(toolCall.id)
                 : (lastToolCallIndex ?? undefined);

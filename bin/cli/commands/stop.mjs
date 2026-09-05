@@ -113,11 +113,15 @@ export async function killByPort(port, deps = {}) {
   return killByPortPosix(port, { exec, kill, running, wait });
 }
 
-async function killByPortPosix(port, { exec, kill, running, wait }) {
-  if (
+function isTestEnvironment() {
+  return (
     process.env.NODE_ENV === "test" ||
     (process.env.DATA_DIR && /omniroute-(cli-)?test/i.test(process.env.DATA_DIR))
-  ) {
+  );
+}
+
+async function killByPortPosix(port, { exec, kill, running, wait }) {
+  if (isTestEnvironment()) {
     return true;
   }
   let pids = [];
@@ -135,6 +139,9 @@ async function killByPortPosix(port, { exec, kill, running, wait }) {
 }
 
 async function killByPortWin32(port, { exec, kill, running, wait }) {
+  if (isTestEnvironment()) {
+    return true;
+  }
   let pids = [];
   try {
     const { stdout } = await exec("netstat", ["-ano"]);

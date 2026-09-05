@@ -429,6 +429,10 @@ export function sanitizeEmptyToolUseHistory(
 
   for (const msg of messages) {
     if (!Array.isArray(msg.content)) {
+      if (typeof msg.content === "string" && msg.content.trim() === "(empty response)") {
+        changed = true;
+        continue;
+      }
       out.push(msg);
       continue;
     }
@@ -586,6 +590,26 @@ export function prepareClaudeRequest(
             block.tool_use_id
           ) {
             block.tool_use_id = sanitizeToolId(block.tool_use_id);
+          }
+        }
+        // Non-Anthropic Claude-shape providers (kimi-coding, glmt, zai, …) can
+        // misread Claude Code's client-side "file unchanged" sentinel as a tool
+        // failure and retry forever. The OpenAI/Gemini request translators
+        // already normalize it; apply the same rewrite here for the
+        // Claude-passthrough path (skipped for Anthropic-native upstreams that
+        // understand the sentinel as-is).
+        if (!supportsRedactedThinking) {
+          for (const block of msg.content) {
+            if (block.type !== "tool_result") continue;
+            if (typeof block.content === "string") {
+              block.content = normalizeClaudeCodeToolResult(block.content);
+            } else if (Array.isArray(block.content)) {
+              for (const c of block.content) {
+                if (c?.type === "text" && typeof c.text === "string") {
+                  c.text = normalizeClaudeCodeToolResult(c.text);
+                }
+              }
+            }
           }
         }
       }

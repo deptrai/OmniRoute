@@ -175,7 +175,10 @@ import { registerBailianCodingPlanQuotaFetcher } from "@omniroute/open-sse/servi
 import { registerQwenTokenPlanQuotaFetcher } from "@omniroute/open-sse/services/qwenTokenPlanQuotaFetcher.ts";
 import { registerCrofUsageFetcher } from "@omniroute/open-sse/services/crofUsageFetcher.ts";
 import { registerDeepseekQuotaFetcher } from "@omniroute/open-sse/services/deepseekQuotaFetcher.ts";
-import { registerMoonshotQuotaFetcher, registerMoonshotFetchersForNodes } from "@omniroute/open-sse/services/moonshotQuotaFetcher.ts";
+import {
+  registerMoonshotQuotaFetcher,
+  registerMoonshotFetchersForNodes,
+} from "@omniroute/open-sse/services/moonshotQuotaFetcher.ts";
 import { registerOpenrouterQuotaFetcher } from "@omniroute/open-sse/services/openrouterQuotaFetcher.ts";
 import { registerOpencodeQuotaFetcher } from "@omniroute/open-sse/services/opencodeQuotaFetcher.ts";
 import { registerGrokWebQuotaFetcher } from "@omniroute/open-sse/services/grokQuotaFetcher.ts";
@@ -232,7 +235,7 @@ void import("@/lib/db/providers")
         id: typeof node.id === "string" ? node.id : null,
         prefix: typeof node.prefix === "string" ? node.prefix : null,
         baseUrl: typeof node.baseUrl === "string" ? node.baseUrl : null,
-      })),
+      }))
     );
   })
   .catch((error) => {
@@ -1965,6 +1968,14 @@ async function handleSingleModelChat(
       const { result, tlsFingerprintUsed } = execution;
       if (!result.success) releaseOAuthSession();
 
+      // Local resource pressure short-circuits before any upstream dispatch —
+      // it is not an upstream/provider failure, so it must not be logged as one
+      // (safeLogEvents would mark it status:"error") nor cool down a healthy
+      // connection. Return before the event-logging block.
+      if (result.errorCode === "resource_pressure" || result.errorType === "resource_pressure") {
+        return withSelectedConnectionHeader(result.response, credentials?.connectionId);
+      }
+
       const proxyLatency = Date.now() - proxyStartTime;
       const providerAlias = PROVIDER_ID_TO_ALIAS[provider] || provider;
       const effectiveTargetFormat =
@@ -2027,12 +2038,6 @@ async function handleSingleModelChat(
       if (isAntigravityMissingProjectError(provider, result)) {
         markAntigravityMissingCloudCodeProject(credentials.connectionId);
         return withSelectedConnectionHeader(result.response, credentials.connectionId);
-      }
-
-      // Local resource pressure is not an upstream account failure — surface the
-      // 503 response immediately without cooling down a healthy connection.
-      if (result.errorCode === "resource_pressure" || result.errorType === "resource_pressure") {
-        return withSelectedConnectionHeader(result.response, credentials?.connectionId);
       }
 
       const isAntigravityStreamReadinessFailure =
@@ -2364,7 +2369,7 @@ async function handleSingleModelChat(
         const waitMs = sameAccountTransportRetryDelayMs();
         log.warn(
           "RETRY",
-          `${provider}/${model} retryable pre-output ${result.status} — retrying same account once after ${waitMs}ms`
+          `${provider}/${model} retryable pre-output ${result.status} — retrying same account (attempt ${transportAttempts + 1}) after ${waitMs}ms`
         );
         const completed = await waitForCooldownAwareRetry(waitMs, requestSignal);
         if (!completed) {

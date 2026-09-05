@@ -397,6 +397,26 @@ export function hasStreamReadinessSignal(text: string): boolean {
   return finishStreamReadinessSignal(state);
 }
 
+/**
+ * Provider-agnostic check for upstream diagnostics that are deterministic for
+ * the given payload — content-policy / safety-filter rejections fail identically
+ * on every account, so they must keep their real 4xx status instead of being
+ * surfaced as a retryable 502 stream error.
+ */
+function classifyTerminalStreamDiagnostic(
+  diagnostic: string | undefined
+): { status: number; code: string; type: string } | null {
+  if (!diagnostic) return null;
+  if (
+    /content policy|safety filter|sensitive or unsafe content|content_policy_violation/i.test(
+      diagnostic
+    )
+  ) {
+    return { status: 400, code: "content_policy_violation", type: "invalid_request_error" };
+  }
+  return null;
+}
+
 function createErrorResponse(
   status: number,
   message: string,
@@ -613,6 +633,36 @@ export async function ensureStreamReadiness(
 
         const classificationReason = "Stream ended before producing a non-ping SSE event";
         const upstreamDiagnostic = readinessState.upstreamDiagnostic || undefined;
+
+        // A stream that ends with only a deterministic upstream rejection
+        // (content-policy / safety filter) must surface the real status.
+        // Reclassifying it as a 502 early-EOF triggers pointless same-account
+        // retries and cross-account rotation for a payload that can never
+        // succeed on any account (observed: 9 retries / ~10min per request).
+        const terminal = classifyTerminalStreamDiagnostic(upstreamDiagnostic);
+        if (terminal) {
+          const reason = upstreamDiagnostic!;
+          options.log?.warn?.(
+            "STREAM",
+            `${reason} (${options.provider || "provider"}/${options.model || "unknown"})`
+          );
+          return {
+            ok: false,
+            reason,
+            classificationReason,
+            upstreamDiagnostic,
+            code: terminal.code,
+            type: terminal.type,
+            response: createErrorResponse(
+              terminal.status,
+              upstreamDiagnostic!,
+              terminal.code,
+              terminal.type,
+              upstreamDiagnostic
+            ),
+          };
+        }
+
         const reason = upstreamDiagnostic
           ? `${classificationReason}: ${upstreamDiagnostic}`
           : classificationReason;
