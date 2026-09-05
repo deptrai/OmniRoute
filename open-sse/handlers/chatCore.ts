@@ -5862,7 +5862,18 @@ export async function handleChatCore({
     clientResponseFormat === FORMATS.OPENAI &&
     !isResponsesEndpoint &&
     !isDroidCLI;
-  const streamStateBody = finalBody || body;
+  // Prefer whichever body still carries `tools` — some executor paths consume
+  // or re-key the tools array (e.g. Devin Desktop encodes tools into the
+  // Connect request separately), so the dispatched body can lose the client
+  // tool schemas that response-side sanitizers (arg repair) need.
+  const streamStateBody = (() => {
+    const hasTools = (b: unknown): boolean =>
+      Array.isArray((b as { tools?: unknown[] } | null | undefined)?.tools) &&
+      (b as { tools: unknown[] }).tools.length > 0;
+    if (hasTools(finalBody)) return finalBody;
+    if (hasTools(body)) return body;
+    return finalBody || body;
+  })();
 
   if (needsResponsesTranslation) {
     // Provider returns openai-responses, translate to openai (Chat Completions) that clients expect

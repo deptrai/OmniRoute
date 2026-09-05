@@ -12,9 +12,10 @@ import assert from "node:assert/strict";
 const { openaiToClaudeResponse } =
   await import("../../open-sse/translator/response/openai-to-claude.ts");
 
-function createState() {
+function createState(toolSchemas = null) {
   return {
     toolCalls: new Map(),
+    ...(toolSchemas ? { toolSchemas } : {}),
   };
 }
 
@@ -142,4 +143,136 @@ test("well-formed tool-call arguments still close normally (no regression)", () 
     "valid args must not trigger the truncation error path"
   );
   assert.ok(finish.some((e) => e?.type === "content_block_stop"));
+});
+
+test("schema-driven repair: wrong types and extra keys are fixed against input_schema", () => {
+  const toolSchemas = new Map([
+    [
+      "Read",
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["file_path"],
+        properties: {
+          file_path: { type: "string" },
+          limit: { type: "number" },
+          pages: { type: "string" },
+        },
+      },
+    ],
+  ]);
+  const state = createState(toolSchemas);
+
+  openaiToClaudeResponse(
+    {
+      id: "chatcmpl-schema-1",
+      model: "glm-5.3",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call_schema",
+                type: "function",
+                // stringified number + undeclared key when schema is closed
+                function: {
+                  name: "Read",
+                  arguments: '{"file_path":"/tmp/a.ts","limit":"50","bogus":1}',
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    state
+  );
+
+  const finish = flatten([
+    openaiToClaudeResponse(
+      {
+        id: "chatcmpl-schema-1",
+        model: "glm-5.3",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 10, completion_tokens: 20 },
+      },
+      state
+    ),
+  ]);
+
+  assert.equal(
+    finish.some((e) => e?.type === "error"),
+    false
+  );
+  const delta = finish.find(
+    (e) => e?.type === "content_block_delta" && e.delta?.type === "input_json_delta"
+  );
+  assert.ok(delta, "expected one corrective input_json_delta");
+  const parsed = JSON.parse(delta.delta.partial_json);
+  assert.deepEqual(parsed, { file_path: "/tmp/a.ts", limit: 50 });
+});
+
+test("schema-driven repair: missing required fields filled with type-correct empties", () => {
+  const toolSchemas = new Map([
+    [
+      "TaskUpdate",
+      {
+        type: "object",
+        required: ["taskId", "tags"],
+        properties: {
+          taskId: { type: "string" },
+          tags: { type: "array" },
+          active: { type: "boolean" },
+        },
+      },
+    ],
+  ]);
+  const state = createState(toolSchemas);
+
+  openaiToClaudeResponse(
+    {
+      id: "chatcmpl-schema-2",
+      model: "glm-5.3",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call_req",
+                type: "function",
+                function: {
+                  name: "TaskUpdate",
+                  arguments: '{"taskId":123,"active":"true"}',
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    state
+  );
+
+  const finish = flatten([
+    openaiToClaudeResponse(
+      {
+        id: "chatcmpl-schema-2",
+        model: "glm-5.3",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 10, completion_tokens: 20 },
+      },
+      state
+    ),
+  ]);
+
+  const delta = finish.find(
+    (e) => e?.type === "content_block_delta" && e.delta?.type === "input_json_delta"
+  );
+  const parsed = JSON.parse(delta.delta.partial_json);
+  // number→string coercion, "true"→boolean, missing required array filled
+  assert.deepEqual(parsed, { taskId: "123", tags: [], active: true });
 });

@@ -308,6 +308,145 @@ export function hasToolCallShim(name: string | undefined | null): boolean {
   return Boolean(resolveToolCallShim(name));
 }
 
+// ---------------------------------------------------------------------------
+// Generic schema-driven argument repair
+// ---------------------------------------------------------------------------
+
+const SCHEMA_REPAIR_MAX_DEPTH = 4;
+
+function schemaTypeSet(prop: unknown): Set<string> {
+  const p = prop && typeof prop === "object" ? (prop as Record<string, unknown>) : null;
+  const t = p?.type;
+  if (typeof t === "string") return new Set([t]);
+  if (Array.isArray(t)) return new Set(t.filter((x): x is string => typeof x === "string"));
+  return new Set();
+}
+
+function defaultForTypes(types: Set<string>): unknown {
+  if (types.has("array")) return [];
+  if (types.has("object")) return {};
+  if (types.has("number") || types.has("integer")) return 0;
+  if (types.has("boolean")) return false;
+  return "";
+}
+
+/**
+ * Coerce a single scalar/object value toward the schema's declared types.
+ * Returns the coerced value, or the original when no safe coercion applies.
+ * Only unambiguous conversions are attempted — never guess semantics.
+ */
+function coerceValueForSchema(value: unknown, propSchema: unknown, depth: number): unknown {
+  const types = schemaTypeSet(propSchema);
+  if (types.size === 0) return value;
+
+  if (types.has("string") && (typeof value === "number" || typeof value === "boolean")) {
+    return String(value);
+  }
+  if (
+    (types.has("number") || types.has("integer")) &&
+    typeof value === "string" &&
+    value.trim() !== "" &&
+    /^-?\d+(\.\d+)?$/.test(value.trim())
+  ) {
+    const n = Number(value.trim());
+    return types.has("integer") && !types.has("number") ? Math.trunc(n) : n;
+  }
+  if (types.has("boolean")) {
+    if (value === "true" || value === 1) return true;
+    if (value === "false" || value === 0) return false;
+  }
+  if (types.has("array") && !Array.isArray(value)) {
+    return [value];
+  }
+  // JSON-stringified object — a common model failure mode.
+  if (types.has("object") && typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return sanitizeArgsAgainstSchema(propSchema, parsed, depth + 1);
+      }
+    } catch {
+      /* not JSON — leave as-is */
+    }
+  }
+  if (types.has("object") && value && typeof value === "object" && !Array.isArray(value)) {
+    return sanitizeArgsAgainstSchema(propSchema, value, depth + 1);
+  }
+  if (types.has("array") && Array.isArray(value)) {
+    const items =
+      propSchema && typeof propSchema === "object"
+        ? (propSchema as Record<string, unknown>).items
+        : undefined;
+    if (items && depth < SCHEMA_REPAIR_MAX_DEPTH) {
+      return value.map((item) => coerceValueForSchema(item, items, depth + 1));
+    }
+  }
+  return value;
+}
+
+/**
+ * Conservative JSON-Schema repair of parsed tool arguments:
+ * - drops properties not declared when additionalProperties === false
+ * - coerces unambiguous type mismatches (stringified numbers/booleans,
+ *   scalar→array, JSON-stringified objects)
+ * - fills missing required fields with type-correct empty values
+ * - recurses into nested properties/items (depth-capped)
+ * Returns the same reference when nothing changed.
+ */
+function sanitizeArgsAgainstSchema(
+  schema: unknown,
+  args: unknown,
+  depth: number
+): Record<string, unknown> | unknown {
+  const sch = schema && typeof schema === "object" ? (schema as Record<string, unknown>) : null;
+  if (!sch || !args || typeof args !== "object" || Array.isArray(args)) return args;
+  if (depth >= SCHEMA_REPAIR_MAX_DEPTH) return args;
+
+  const properties =
+    sch.properties && typeof sch.properties === "object"
+      ? (sch.properties as Record<string, unknown>)
+      : {};
+  const required = new Set(
+    Array.isArray(sch.required)
+      ? sch.required.filter((x): x is string => typeof x === "string")
+      : []
+  );
+  const record = args as Record<string, unknown>;
+
+  // Fill missing required fields with type-correct empties.
+  for (const key of required) {
+    if (!(key in record)) {
+      record[key] = defaultForTypes(schemaTypeSet(properties[key]));
+    }
+  }
+
+  // Coerce declared properties.
+  for (const [key, propSchema] of Object.entries(properties)) {
+    if (key in record) {
+      record[key] = coerceValueForSchema(record[key], propSchema, depth);
+    }
+  }
+
+  // Drop undeclared keys when the schema is closed.
+  if (sch.additionalProperties === false) {
+    for (const key of Object.keys(record)) {
+      if (!(key in properties)) delete record[key];
+    }
+  }
+
+  return record;
+}
+
+/**
+ * Schema-driven repair entry point for a parsed arguments object.
+ */
+export function sanitizeToolArgsBySchema(
+  schema: Record<string, unknown> | null | undefined,
+  args: unknown
+): unknown {
+  return sanitizeArgsAgainstSchema(schema ?? null, args, 0);
+}
+
 /**
  * Apply the registered shim for a tool call's raw assembled arguments string.
  * Returns a stringified JSON value safe to emit as input_json_delta.partial_json.
@@ -327,6 +466,32 @@ export function applyToolCallShimToBuffer(name: string, raw: string): string {
 
   const patched = shim(parsed);
   return JSON.stringify(patched);
+}
+
+/**
+ * Full finish-time sanitizer: named shim (if any) followed by schema-driven
+ * repair against the tool's declared input_schema/parameters. Callers pass the
+ * schema from state.toolSchemas so models that emit wrong field names, wrong
+ * types, or extra keys get a corrected argument object instead of a client-side
+ * InputValidationError.
+ */
+export function applyToolCallSanitizers(
+  name: string,
+  raw: string,
+  schema?: Record<string, unknown> | null
+): string {
+  const shim = resolveToolCallShim(name);
+
+  let parsed: unknown;
+  try {
+    parsed = raw && raw.length > 0 ? JSON.parse(raw) : {};
+  } catch {
+    parsed = {};
+  }
+
+  const patched = shim ? shim(parsed) : parsed;
+  const repaired = schema ? sanitizeToolArgsBySchema(schema, patched) : patched;
+  return JSON.stringify(repaired);
 }
 
 // Exposed for unit tests only.

@@ -1,7 +1,31 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { CLAUDE_OAUTH_TOOL_PREFIX } from "../request/openai-to-claude.ts";
-import { hasToolCallShim, applyToolCallShimToBuffer } from "../helpers/toolCallShim.ts";
+import { hasToolCallShim, applyToolCallSanitizers } from "../helpers/toolCallShim.ts";
+
+/** Look up the client-declared input_schema/parameters for a (restored) tool name. */
+function lookupToolSchema(
+  state: { toolSchemas?: unknown },
+  name: string | undefined | null
+): Record<string, unknown> | null {
+  const map = state?.toolSchemas;
+  if (!(map instanceof Map) || typeof name !== "string" || !name) return null;
+  const schema = map.get(name);
+  return schema && typeof schema === "object" ? (schema as Record<string, unknown>) : null;
+}
+
+/**
+ * Whether this tool's arguments must be buffered and sanitized at close.
+ * Covers the named shims AND any tool with a declared input_schema — models
+ * that emit wrong field names, wrong types, or extra keys would otherwise hit
+ * a client-side InputValidationError retry loop.
+ */
+function needsArgSanitizer(
+  state: { toolSchemas?: unknown },
+  name: string | undefined | null
+): boolean {
+  return hasToolCallShim(name) || Boolean(lookupToolSchema(state, name));
+}
 import { appendToolCallArgumentDelta } from "../../utils/toolCallArguments.ts";
 import { isAbortFinishReason } from "../../utils/finishReason.ts";
 import {
@@ -466,9 +490,10 @@ export function openaiToClaudeResponse(chunk, state) {
           id: sanitizedId,
           name: incomingName,
           blockIndex: state.nextBlockIndex++,
-          // Shimmed tools buffer their raw args and emit a single corrected
+          // Tools needing arg sanitization (named shim or declared schema)
+          // buffer their raw args and emit a single corrected
           // input_json_delta at content_block_stop time (see finish handler).
-          shimmed: incomingName ? hasToolCallShim(incomingName) : false,
+          shimmed: incomingName ? needsArgSanitizer(state, incomingName) : false,
           argBuffer: "",
           startEmitted: false,
         });
@@ -480,7 +505,7 @@ export function openaiToClaudeResponse(chunk, state) {
         if (tc.id && !toolInfo.id) toolInfo.id = sanitizeToolId(tc.id);
         if (incomingName && !toolInfo.startEmitted && !toolInfo.name) {
           toolInfo.name = incomingName;
-          toolInfo.shimmed = hasToolCallShim(incomingName);
+          toolInfo.shimmed = needsArgSanitizer(state, incomingName);
         }
 
         // Emit content_block_start once we have a name. If arguments arrive before
@@ -561,10 +586,11 @@ export function openaiToClaudeResponse(chunk, state) {
     // Closing the block normally would hand the client unparseable
     // partial_json that may validate-fail or, worse, execute a truncated
     // command. Emit a terminal error instead so the turn is retried.
-    // Shimmed tools are exempt — their shim repairs the buffer at close.
+    // Applies to every tool — sanitized tools would otherwise be "repaired"
+    // into a wrong {}-ish call.
     let truncatedArgs = false;
     for (const [, toolInfo] of state.toolCalls) {
-      if (toolInfo.shimmed || !toolInfo.argBuffer) continue;
+      if (!toolInfo.argBuffer) continue;
       try {
         JSON.parse(toolInfo.argBuffer);
       } catch {
@@ -602,10 +628,15 @@ export function openaiToClaudeResponse(chunk, state) {
         });
       }
 
-      // For shimmed tools, emit one corrective input_json_delta with the
-      // fully patched JSON before closing the block.
+      // For sanitized tools (named shim or declared schema), emit one
+      // corrective input_json_delta with the fully patched JSON before
+      // closing the block.
       if (toolInfo.shimmed) {
-        const patched = applyToolCallShimToBuffer(toolInfo.name, toolInfo.argBuffer || "");
+        const patched = applyToolCallSanitizers(
+          toolInfo.name,
+          toolInfo.argBuffer || "",
+          lookupToolSchema(state, toolInfo.name)
+        );
         results.push({
           type: "content_block_delta",
           index: toolInfo.blockIndex,
