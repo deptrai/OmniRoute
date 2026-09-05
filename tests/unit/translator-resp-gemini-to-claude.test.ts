@@ -136,6 +136,7 @@ test("Gemini -> Claude stream: cachedContentTokenCount > promptTokenCount clamps
               },
             ],
           },
+          finishReason: "STOP",
         },
       ],
       usageMetadata: {
