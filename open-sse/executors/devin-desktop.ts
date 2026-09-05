@@ -671,7 +671,7 @@ function decodeGetChatMessageResponse(bytes: Uint8Array): DecodedResponse {
       result.stopReason = field.value;
     } else if (field.wireType === 2 && field.fieldNumber === 6) {
       const toolCall = decodeToolCall(field.value);
-      if (toolCall.id) result.toolCalls.push(toolCall);
+      if (toolCall.id || toolCall.name || toolCall.arguments) result.toolCalls.push(toolCall);
     } else if (field.wireType === 2 && field.fieldNumber === 7) {
       result.usage = decodeUsage(field.value);
     } else if (field.wireType === 2 && field.fieldNumber === 9) {
@@ -1004,6 +1004,7 @@ export class DevinDesktopExecutor extends BaseExecutor {
         let roleEmitted = false;
         let stopReason = 0;
         const toolCallIndexes = new Map<string, number>();
+        let lastToolCallIndex: number | null = null;
         let usage: DevinUsage | null = null;
         let trailerError: ConnectTrailerError | null = null;
         let sawEndStream = false;
@@ -1036,10 +1037,16 @@ export class DevinDesktopExecutor extends BaseExecutor {
             if (response.thinking) emitChunk({ reasoning_content: response.thinking });
             if (response.text) emitChunk({ content: response.text });
             for (const toolCall of response.toolCalls) {
-              const existingIndex = toolCallIndexes.get(toolCall.id);
-              const index = existingIndex ?? toolCallIndexes.size;
+              // Argument-only deltas arrive as separate proto messages with no
+              // id/name — they continue the most recently started tool call.
+              const existingIndex = toolCall.id
+                ? toolCallIndexes.get(toolCall.id)
+                : (lastToolCallIndex ?? undefined);
+              const index = existingIndex ?? (toolCall.id ? toolCallIndexes.size : -1);
+              if (index < 0) continue;
               const firstDelta = existingIndex === undefined;
-              if (firstDelta) toolCallIndexes.set(toolCall.id, index);
+              if (toolCall.id) toolCallIndexes.set(toolCall.id, index);
+              lastToolCallIndex = index;
               const functionDelta: Record<string, string> = {};
               if (toolCall.name) functionDelta.name = toolCall.name;
               if (toolCall.arguments) functionDelta.arguments = toolCall.arguments;
