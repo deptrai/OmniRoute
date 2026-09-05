@@ -34,6 +34,30 @@ describe("resolveRoutingModel (#4863)", () => {
   it("falls back to body.model when the header is empty/whitespace-only", () => {
     assert.equal(resolveRoutingModel(req({ "x-route-model": "   " }), { model: "fallback" }), "fallback");
   });
+
+  it("detects subagent request via x-anthropic-billing-header and reroutes to default subagent model", () => {
+    const result = resolveRoutingModel(
+      req({ "x-anthropic-billing-header": "cc_version=1.0;cc_is_subagent=true" }),
+      { model: "claude-opus-5" }
+    );
+    assert.equal(result, "claude-haiku-4.5");
+  });
+
+  it("detects subagent request via system prompt and reroutes to default subagent model", () => {
+    const result = resolveRoutingModel(req({}), {
+      model: "swe-1.7",
+      system: "You are an agent for Claude Code, Anthropic's official CLI for Claude.",
+    });
+    assert.equal(result, "claude-haiku-4.5");
+  });
+
+  it("honors explicit X-Route-Model header even for subagent requests", () => {
+    const result = resolveRoutingModel(
+      req({ "x-is-subagent": "true", "x-route-model": "custom/override-model" }),
+      { model: "claude-sonnet-5" }
+    );
+    assert.equal(result, "custom/override-model");
+  });
 });
 
 describe("alignBodyModelWithRouting (X-Route-Model body lockstep)", () => {

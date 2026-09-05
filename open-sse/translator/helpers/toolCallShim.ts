@@ -68,6 +68,166 @@ function sanitizeReadArgs(args: Record<string, unknown>): void {
   }
 }
 
+// Claude Code's Skill tool requires `skill` (string) + optional `args`.
+// GLM-5.2 and other non-Anthropic models frequently emit `name` instead of `skill`
+// (because `name` is a common parameter in other tools), causing InputValidationError
+// "The required parameter `skill` is missing" and a wasted retry round-trip.
+// Remap `name` → `skill` when `skill` is absent.
+function sanitizeSkillArgs(args: Record<string, unknown>): void {
+  // Remap name -> skill when skill is missing (GLM-5.2 confuses the two).
+  if (!("skill" in args) && typeof args.name === "string") {
+    args.skill = args.name;
+  }
+  // `name` is never a valid Skill parameter — always remove it.
+  delete args.name;
+}
+
+// Paperclip MCP's TaskUpdate tool requires `taskId` as string, but GLM-5.2 and
+// other non-Anthropic models emit it as:
+//   - a number (e.g. `taskId: 1`) → coerce to string
+//   - `id` instead of `taskId` (e.g. `id: 1`) → remap to taskId
+// Either case causes InputValidationError and a retry loop.
+function sanitizeTaskUpdateArgs(args: Record<string, unknown>): void {
+  // Remap `id` → `taskId` when `taskId` is absent (GLM common mistake)
+  if (!("taskId" in args) && "id" in args) {
+    args.taskId = args.id;
+    delete args.id;
+  }
+  if (typeof args.taskId === "number") {
+    args.taskId = String(args.taskId);
+  }
+}
+
+// Claude Code's Agent tool requires BOTH `description` (short task summary)
+// AND `prompt` (full task instructions). GLM-5.2-max is inconsistent:
+//   - Sometimes emits only `description` (omits `prompt`)
+//   - Sometimes emits only `prompt` (omits `description`)
+//   - Sometimes emits both
+// Both missing-field cases cause InputValidationError and a wasted retry.
+// Fix: ensure BOTH fields exist by copying whichever is missing from the other.
+function sanitizeAgentArgs(args: Record<string, unknown>): void {
+  // Remap non-standard fields from models: summary -> description, message -> prompt
+  if (!("description" in args) && typeof args.summary === "string") {
+    args.description = args.summary;
+  }
+  if (!("prompt" in args) && typeof args.message === "string") {
+    args.prompt = args.message;
+  }
+  delete args.summary;
+  delete args.message;
+  delete args.type;
+
+  const hasPrompt = typeof args.prompt === "string" && args.prompt !== "";
+  const hasDescription = typeof args.description === "string" && args.description !== "";
+
+  if (!hasPrompt && hasDescription) {
+    args.prompt = args.description;
+  } else if (!hasDescription && hasPrompt) {
+    const promptStr = args.prompt as string;
+    args.description = promptStr.length > 80 ? promptStr.slice(0, 77) + "..." : promptStr;
+  }
+}
+
+function sanitizeAskUserQuestionArgs(args: Record<string, unknown>): void {
+  const normalizeOption = (opt: unknown): Record<string, unknown> => {
+    if (typeof opt === "string") {
+      return { label: opt, description: "" };
+    }
+    if (typeof opt === "object" && opt !== null && !Array.isArray(opt)) {
+      const o = opt as Record<string, unknown>;
+      const label =
+        typeof o.label === "string"
+          ? o.label
+          : typeof o.text === "string"
+            ? o.text
+            : typeof o.value === "string"
+              ? o.value
+              : typeof o.name === "string"
+                ? o.name
+                : JSON.stringify(o);
+      const description = typeof o.description === "string" ? o.description : "";
+      return {
+        ...o,
+        label,
+        description,
+      };
+    }
+    return { label: String(opt ?? ""), description: "" };
+  };
+
+  const normalizeQuestionObj = (q: unknown): Record<string, unknown> => {
+    if (typeof q === "string") {
+      return {
+        header: "Question",
+        question: q,
+        options: [],
+      };
+    }
+    if (typeof q === "object" && q !== null && !Array.isArray(q)) {
+      const rec = { ...(q as Record<string, unknown>) };
+      if (!rec.header || typeof rec.header !== "string") {
+        rec.header = typeof rec.title === "string" && rec.title ? rec.title : "Question";
+      }
+      if (!rec.question || typeof rec.question !== "string") {
+        rec.question =
+          typeof rec.text === "string"
+            ? rec.text
+            : typeof rec.prompt === "string"
+              ? rec.prompt
+              : typeof rec.description === "string"
+                ? rec.description
+                : "";
+      }
+      if (Array.isArray(rec.options)) {
+        rec.options = rec.options.map(normalizeOption);
+      } else {
+        rec.options = [];
+      }
+      return rec;
+    }
+    return { header: "Question", question: String(q ?? ""), options: [] };
+  };
+
+  const extractedQuestions: Record<string, unknown>[] = [];
+
+  if (Array.isArray(args.questions)) {
+    for (const item of args.questions) {
+      extractedQuestions.push(normalizeQuestionObj(item));
+    }
+  } else if (args.questions && typeof args.questions === "object") {
+    extractedQuestions.push(normalizeQuestionObj(args.questions));
+  }
+
+  const hasRootQuestion =
+    typeof args.question === "string" ||
+    (typeof args.question === "object" && args.question !== null) ||
+    Array.isArray(args.options);
+
+  if (hasRootQuestion) {
+    const rawQuestion = args.question;
+    const rawHeader = typeof args.header === "string" ? args.header : "Question";
+    const rawOptions = Array.isArray(args.options) ? args.options : [];
+
+    const rootQ =
+      typeof rawQuestion === "object" && rawQuestion !== null
+        ? normalizeQuestionObj(rawQuestion)
+        : normalizeQuestionObj({
+            header: rawHeader,
+            question: rawQuestion,
+            options: rawOptions,
+          });
+
+    extractedQuestions.push(rootQ);
+    delete args.question;
+    delete args.options;
+    delete args.header;
+  }
+
+  if (extractedQuestions.length > 0) {
+    args.questions = extractedQuestions;
+  }
+}
+
 const TOOL_SHIMS: Record<string, ShimFn> = {
   // Claude Code Read rejects bad params and retries — wasting tokens with non-Anthropic
   // models that emit oversized limits, negative offsets, stringified numbers, or stray
@@ -77,6 +237,42 @@ const TOOL_SHIMS: Record<string, ShimFn> = {
     if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
     const patched = { ...(input as Record<string, unknown>) };
     sanitizeReadArgs(patched);
+    return patched;
+  },
+  // Claude Code Skill tool: GLM-5.2 emits `name` instead of `skill`, causing
+  // InputValidationError + retry. Remap so the first call succeeds.
+  Skill: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeSkillArgs(patched);
+    return patched;
+  },
+  // Paperclip MCP TaskUpdate: GLM-5.2 emits `taskId` as number instead of string,
+  // causing InputValidationError + 9x retry loop. Coerce number → string.
+  TaskUpdate: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeTaskUpdateArgs(patched);
+    return patched;
+  },
+  // Claude Code Agent tool: ensures both description and prompt exist, remapping non-standard fields.
+  Agent: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeAgentArgs(patched);
+    return patched;
+  },
+  // Claude Code AskUserQuestion tool: normalizes root question/options to questions array with object options.
+  AskUserQuestion: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeAskUserQuestionArgs(patched);
+    return patched;
+  },
+  ask_user_question: (input) => {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+    const patched = { ...(input as Record<string, unknown>) };
+    sanitizeAskUserQuestionArgs(patched);
     return patched;
   },
   submit_pr_review: (input) => {

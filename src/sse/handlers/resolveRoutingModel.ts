@@ -91,10 +91,17 @@ export function resolveSubagentRoutingModel(
 
 export function resolveRoutingModel(
   request: HeaderCarrier,
-  body: { model?: string | null }
+  body: { model?: string | null; system?: unknown; messages?: unknown }
 ): string | null | undefined {
   const headerModel = request.headers.get("x-route-model")?.trim();
-  return headerModel || body.model;
+  if (headerModel) return headerModel;
+
+  const baseModel = body.model;
+  if (isSubagentRequest(request, body)) {
+    return resolveSubagentRoutingModel(baseModel, true);
+  }
+
+  return baseModel;
 }
 
 /**

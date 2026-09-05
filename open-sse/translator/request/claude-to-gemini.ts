@@ -11,6 +11,7 @@ import {
 } from "../../services/geminiThoughtSignatureStore.ts";
 import { capMaxOutputTokens, capThinkingBudget } from "../../../src/lib/modelCapabilities.ts";
 import { getModelSpec } from "../../../src/shared/constants/modelSpecs.ts";
+import { normalizeClaudeCodeToolResult } from "../helpers/claudeHelper.ts";
 import {
   buildChangedToolNameMap,
   buildHistoricalToolResultContext,
@@ -183,6 +184,9 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
                 content = content
                   .map((c) => (c.type === "text" ? c.text : JSON.stringify(c)))
                   .join("\n");
+              }
+              if (typeof content === "string") {
+                content = normalizeClaudeCodeToolResult(content);
               }
               const toolUseId = block.tool_use_id;
               const name = toolUseNames[toolUseId] || "unknown";

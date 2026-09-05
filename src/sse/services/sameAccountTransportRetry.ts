@@ -7,7 +7,7 @@
  * affinity. A second failure then takes a short cooldown and may rotate.
  */
 
-export const SAME_ACCOUNT_TRANSPORT_RETRY_MAX = 1;
+export const SAME_ACCOUNT_TRANSPORT_RETRY_MAX = 3;
 export const SAME_ACCOUNT_TRANSPORT_RETRY_MIN_DELAY_MS = 2000;
 export const SAME_ACCOUNT_TRANSPORT_RETRY_JITTER_MS = 1000;
 
@@ -23,6 +23,7 @@ const RETRYABLE_TRANSPORT_TEXT = [
   /econnreset/i,
   /socket hang up/i,
   /und_err_socket/i,
+  /permission_denied:.*internal error/i,
 ];
 
 const NON_RETRYABLE_ERROR_TYPES = new Set(["lease_error", "account_semaphore_capacity"]);
