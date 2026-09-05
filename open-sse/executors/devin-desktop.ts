@@ -32,6 +32,21 @@ const CONNECT_END_STREAM_FLAG = 0x02;
 const MAX_CONNECT_FRAME_BYTES = 16 * 1024 * 1024;
 const MAX_AUTH_RESPONSE_BYTES = 1024 * 1024;
 
+// CompletionConfig defaults for the Devin Desktop Connect GetChatMessage wire.
+// Field #2 in the CompletionConfiguration message enforces the output cap; without
+// it the server falls back to a very small default (observed ~1024 tokens for
+// swe-1-7), which truncates multi-tool and long-form responses.
+const DEVIN_DESKTOP_DEFAULT_MAX_TOKENS = 8192;
+const DEVIN_DESKTOP_DEFAULT_TEMPERATURE = 1.0;
+// The upstream rejects exactly temperature=0 with an opaque "internal error";
+// 0.001 is the closest greedy value the server accepts (verified by WindsurfAPI).
+const DEVIN_DESKTOP_MIN_TEMPERATURE = 0.001;
+const DEVIN_DESKTOP_DEFAULT_TOP_P = 0.95;
+const DEVIN_DESKTOP_DEFAULT_TOP_K = 40;
+// max_newlines (field #3) is a no-op cap; set it to a large, safe context-window
+// value so it cannot become the binding output limit.
+const DEVIN_DESKTOP_DEFAULT_MAX_NEWLINES = 128_000;
+
 export function resolveDevinDesktopVersion(): string {
   const override = process.env.DEVIN_DESKTOP_VERSION?.trim() ?? "";
   return DEVIN_VERSION_PATTERN.test(override) ? override : VERIFIED_DEVIN_DESKTOP_VERSION;
@@ -88,6 +103,13 @@ function encodeVarintField(fieldNumber: number, value: number): Uint8Array {
     : concatBytes([encodeVarint(fieldNumber << 3), encodeVarint(value)]);
 }
 
+function encodeFixed64Field(fieldNumber: number, value: number): Uint8Array {
+  if (!Number.isFinite(value)) return new Uint8Array(0);
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setFloat64(0, value, true);
+  return concatBytes([encodeVarint((fieldNumber << 3) | 1), bytes]);
+}
+
 export type DevinDesktopToolCallInput = {
   id: string;
   name: string;
@@ -131,6 +153,11 @@ export type DevinDesktopRequestInput = DevinDesktopMetadataInput & {
   tools?: DevinDesktopToolInput[];
   disableParallelToolCalls?: boolean;
   toolChoice?: DevinDesktopToolChoice;
+  maxTokens?: number;
+  maxNewlines?: number;
+  temperature?: number;
+  topP?: number;
+  topK?: number;
 };
 
 function encodeMetadata(input: DevinDesktopMetadataInput): Uint8Array {
@@ -187,6 +214,36 @@ function encodeChatToolChoice(choice: DevinDesktopToolChoice): Uint8Array {
     : encodeString(2, choice.toolName);
 }
 
+function toPositiveFinite(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  return undefined;
+}
+
+function toClampedTemperature(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(value, DEVIN_DESKTOP_MIN_TEMPERATURE);
+  }
+  return DEVIN_DESKTOP_DEFAULT_TEMPERATURE;
+}
+
+/** Encode the CompletionConfiguration sub-message (GetChatMessageRequest field #8). */
+function encodeCompletionConfig(input: DevinDesktopRequestInput): Uint8Array {
+  const maxTokens = toPositiveFinite(input.maxTokens) ?? DEVIN_DESKTOP_DEFAULT_MAX_TOKENS;
+  const maxNewlines = toPositiveFinite(input.maxNewlines) ?? DEVIN_DESKTOP_DEFAULT_MAX_NEWLINES;
+  const temperature = toClampedTemperature(input.temperature);
+  const topP = toPositiveFinite(input.topP) ?? DEVIN_DESKTOP_DEFAULT_TOP_P;
+  const topK = toPositiveFinite(input.topK) ?? DEVIN_DESKTOP_DEFAULT_TOP_K;
+
+  return concatBytes([
+    encodeVarintField(1, 1),
+    encodeVarintField(2, maxTokens),
+    encodeVarintField(3, maxNewlines),
+    encodeFixed64Field(5, temperature),
+    encodeVarintField(7, topK),
+    encodeFixed64Field(8, topP),
+  ]);
+}
+
 /** Encode the verified exa.api_server_pb.GetChatMessageRequest wire schema. */
 export function encodeDevinDesktopRequest(input: DevinDesktopRequestInput): Uint8Array {
   const fields: Uint8Array[] = [
@@ -194,7 +251,10 @@ export function encodeDevinDesktopRequest(input: DevinDesktopRequestInput): Uint
     encodeString(2, input.systemPrompt),
   ];
   for (const prompt of input.prompts) fields.push(encodeField(3, encodeChatMessagePrompt(prompt)));
-  fields.push(encodeVarintField(7, 5)); // CHAT_MESSAGE_REQUEST_TYPE_CASCADE
+  fields.push(
+    encodeVarintField(7, 5), // CHAT_MESSAGE_REQUEST_TYPE_CASCADE
+    encodeField(8, encodeCompletionConfig(input))
+  );
   for (const tool of input.tools ?? []) {
     fields.push(encodeField(10, encodeChatToolDefinition(tool)));
   }
@@ -922,10 +982,17 @@ export class DevinDesktopExecutor extends BaseExecutor {
       tools: convertTools(requestBody.tools),
       disableParallelToolCalls: requestBody.parallel_tool_calls === false,
       toolChoice: convertToolChoice(requestBody.tool_choice),
+      maxTokens: toPositiveFinite(requestBody.max_tokens),
+      temperature: toClampedTemperature(requestBody.temperature),
+      topP: toPositiveFinite(requestBody.top_p),
+      topK: toPositiveFinite(requestBody.top_k),
     };
     const protobuf = encodeDevinDesktopRequest(protoPayload);
     const framed = encodeDevinConnectEnvelope(protobuf);
-    log?.info?.("DEVIN", `Devin Desktop → ${model} (${converted.prompts.length} messages)`);
+    log?.info?.(
+      "DEVIN",
+      `Devin Desktop → ${model} (${converted.prompts.length} messages, max_tokens=${protoPayload.maxTokens ?? DEVIN_DESKTOP_DEFAULT_MAX_TOKENS})`
+    );
 
     let upstream: Response;
     try {
