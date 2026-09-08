@@ -207,8 +207,26 @@ async function postHandler(request: Request, context: unknown) {
       );
     }
   } else {
-    // Auto-select — try the resolved provider first, then iterate others by cost
-    const selectedCredentials = await resolveSearchExecutionCredentials(providerConfig);
+    // Auto-select — a configured searxng-search connection wins over paid
+    // providers (self-hosted, cost 0). searxng is fallbackOnly + authType "none":
+    // resolveSearchCredentials returns null when no connection exists, so an
+    // unconfigured loopback default can never hijack the primary pick.
+    const configuredSearxngCredentials = await resolveSearchCredentials("searxng-search");
+    const searxngProvider = getSearchProvider("searxng-search");
+    if (
+      configuredSearxngCredentials &&
+      searxngProvider &&
+      !isAllRateLimitedCredentials(configuredSearxngCredentials) &&
+      supportsSearchType(searxngProvider, body.search_type) &&
+      !isProviderBlockedByIdOrAlias("searxng-search", blockedProviders)
+    ) {
+      providerConfig = searxngProvider;
+      credentials = configuredSearxngCredentials;
+    }
+
+    // Try the resolved provider first, then iterate others by cost
+    const selectedCredentials =
+      credentials ?? (await resolveSearchExecutionCredentials(providerConfig));
     if (isAllRateLimitedCredentials(selectedCredentials)) {
       firstRateLimitedCredentials = {
         providerId: providerConfig.id,
@@ -220,11 +238,13 @@ async function postHandler(request: Request, context: unknown) {
 
     if (!credentials) {
       // Sort by cost to find cheapest with credentials (fallback-only providers
-      // are reached via the last-resort step below, never the primary pick).
+      // are reached via the last-resort step below, never the primary pick —
+      // except searxng-search, which enters auto-select when the operator has
+      // actually configured a connection).
       const sortedIds = Object.values(SEARCH_PROVIDERS)
         .filter(
           (provider) =>
-            !provider.fallbackOnly &&
+            (!provider.fallbackOnly || provider.id === "searxng-search") &&
             supportsSearchType(provider, body.search_type) &&
             !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
         )
@@ -234,7 +254,15 @@ async function postHandler(request: Request, context: unknown) {
       for (const pid of sortedIds) {
         if (pid === providerConfig.id) continue;
         const altConfig = getSearchProvider(pid);
-        const altCreds = altConfig ? await resolveSearchExecutionCredentials(altConfig) : null;
+        // searxng-search is authType "none": resolveSearchExecutionCredentials would
+        // return {} even with zero connections, hijacking auto-select onto the
+        // unconfigured loopback default. Require a real connection instead.
+        const altCreds =
+          pid === "searxng-search"
+            ? await resolveSearchCredentials(pid)
+            : altConfig
+              ? await resolveSearchExecutionCredentials(altConfig)
+              : null;
         if (isAllRateLimitedCredentials(altCreds)) {
           firstRateLimitedCredentials ??= { providerId: pid, credentials: altCreds };
           continue;

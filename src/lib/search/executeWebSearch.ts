@@ -190,8 +190,15 @@ export async function executeWebSearch(
     // credentials. Fallback-only free providers are a last resort, so a
     // configured paid provider is never skipped just because a cheaper
     // no-credentials provider appears first in the cost sort (issue #11524).
+    // searxng-search is the exception: it enters auto-select only when the
+    // operator configured a connection — resolveSearchCredentials returns null
+    // for it when unconfigured (authType "none" never auto-passes here).
     const candidateProviders = Object.values(SEARCH_PROVIDERS)
-      .filter((provider) => !provider.fallbackOnly && supportsSearchType(provider, searchType))
+      .filter(
+        (provider) =>
+          (!provider.fallbackOnly || provider.id === "searxng-search") &&
+          supportsSearchType(provider, searchType)
+      )
       .sort((a, b) => a.costPerQuery - b.costPerQuery);
 
     for (const candidate of candidateProviders) {
