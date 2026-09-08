@@ -21,6 +21,11 @@ type GeminiToolSanitizationOptions = {
 const MAX_GEMINI_TOOL_NAME_LENGTH = 64;
 const GEMINI_TOOL_HASH_LENGTH = 8;
 
+// Warn once per process per collision pair — recurring clients (e.g. MCP servers
+// exposing both `foo-bar` and `foo_bar`) would otherwise spam this warning on
+// every request, adding synchronous log I/O to an already busy event loop.
+const warnedCollisionPairs = new Set<string>();
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -129,9 +134,13 @@ export function sanitizeGeminiToolName(
       sanitizedName = buildHashedGeminiToolName("tool", `${name}:${Date.now()}`, 12);
     }
 
-    console.warn(
-      `[GeminiTools] Tool name collision after sanitization: "${name}" conflicts with "${conflictingOriginalName}". Using "${sanitizedName}".`
-    );
+    const collisionKey = `${name}->${conflictingOriginalName}`;
+    if (!warnedCollisionPairs.has(collisionKey)) {
+      warnedCollisionPairs.add(collisionKey);
+      console.warn(
+        `[GeminiTools] Tool name collision after sanitization: "${name}" conflicts with "${conflictingOriginalName}". Using "${sanitizedName}".`
+      );
+    }
   }
 
   toolNameMap?.set(sanitizedName, name);
