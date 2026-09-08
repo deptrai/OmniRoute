@@ -27,7 +27,7 @@ import test from "node:test";
 const CORE_URL = new URL("../../src/lib/db/core.ts", import.meta.url).href;
 // Longer than the probe's first transient-retry delay (500ms), so the main
 // open still meets the lock after the probe has retried; well inside the
-// 2000ms busy_timeout getDbInstance() configures, so the fixed open waits it
+// 10000ms busy_timeout getDbInstance() configures, so the fixed open waits it
 // out instead of timing out.
 const HOLD_MS = 1200;
 
@@ -110,7 +110,7 @@ test("getDbInstance() waits out a transient exclusive file lock instead of faili
     );
     const summary = result.stdout.match(/^\{"busyTimeout":(\d+)\}$/m);
     assert.ok(summary, `child did not report its busy timeout: ${result.stdout}`);
-    assert.equal(Number(summary[1]), 2000);
+    assert.equal(Number(summary[1]), 10000);
   } finally {
     holder?.close();
     fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

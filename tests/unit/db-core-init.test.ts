@@ -431,10 +431,10 @@ test("local sqlite configuration enables WAL and sane pragmas", serial, async ()
       const db = core.getDbInstance();
 
       assert.equal(db.pragma("journal_mode", { simple: true }), "wal");
-      // v3.8.32 intentionally capped busy_timeout at 2s (was 5s) so a contended
-      // synchronous write cannot park the Node event loop past the host watchdog's
-      // 6s liveness probe — see src/lib/db/core.ts.
-      assert.equal(db.pragma("busy_timeout", { simple: true }), 2000);
+      // Busy timeout raised to 10s for replicas=2: contended best-effort writes
+      // (usage_history, call_logs) can wait out a replica's WAL checkpoint without
+      // throwing, while remaining well under the 30s healthcheck probe budget.
+      assert.equal(db.pragma("busy_timeout", { simple: true }), 10000);
       assert.equal(db.pragma("synchronous", { simple: true }), 1);
       // cache_size/mmap_size are settings-driven (migration 046 seeds cacheSize=16384 KiB;
       // mmap falls back to 256MiB) — operators with RAM to spare raise them via the
