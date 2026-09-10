@@ -16,7 +16,7 @@
  * No changes to classifyError, lockModel, or updateProviderConnection needed.
  */
 
-import type { ConfiguredErrorReason } from "./errorConfig.ts";
+import { COOLDOWN_MS, type ConfiguredErrorReason } from "./errorConfig.ts";
 
 export type ProviderErrorRule = {
   id: string;
@@ -290,6 +290,36 @@ function buildAgentrouterRules(): ProviderErrorRule[] {
   ];
 }
 
+// ─── Devin Desktop (Codeium) ───────────────────────────────────────────────
+// Devin Desktop returns rate-limit exhaustion in a gRPC-style trailer:
+//   "resource_exhausted: Reached overall message rate limit. Please try again
+//    later. Your limit will reset in 16 minutes."
+// This is an account-wide cap, not a per-request error, so the cooldown should
+// respect the upstream reset window rather than the OAuth 5s transient default.
+function buildDevinDesktopRules(): ProviderErrorRule[] {
+  return [
+    {
+      id: "devin-desktop-resource-exhausted-reset",
+      match: ({ status, body }) => {
+        if (status !== 429) return null;
+        const text = JSON.stringify(body ?? "").toLowerCase();
+        if (!text.includes("resource_exhausted")) return null;
+        const cooldownMs = parseResetCountdownMs(text);
+        if (cooldownMs && cooldownMs > 0) {
+          return { reason: "quota_exhausted", scope: "connection", cooldownMs };
+        }
+        // No parseable reset phrase — fall back to a sensible default rather
+        // than the 5s OAuth transient cooldown.
+        return {
+          reason: "rate_limit_exceeded",
+          scope: "connection",
+          cooldownMs: COOLDOWN_MS.rateLimit,
+        };
+      },
+    },
+  ];
+}
+
 /**
  * Global registry. Provider name → ordered list of rules (first match wins).
  * Add new providers here; the matcher in classifyError will pick them up
@@ -304,6 +334,7 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
   ["cloudflare-ai", buildCloudflareAiRules()],
   ["openrouter", buildOpenrouterRules()],
   ["agentrouter", buildAgentrouterRules()],
+  ["devin-desktop", buildDevinDesktopRules()],
 ]);
 
 /**
@@ -376,7 +407,7 @@ export function egressBucketedLockProviders(): string[] {
  * of the error body by construction, so a rule that never sees body text could
  * never match anything, defeating the point of declaring it.
  */
-const FULL_TEXT_RULE_PROVIDERS = new Set(["agentrouter"]);
+const FULL_TEXT_RULE_PROVIDERS = new Set(["agentrouter", "devin-desktop"]);
 
 /**
  * True when an operator has declared at least one rule for this provider via

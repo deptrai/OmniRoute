@@ -794,6 +794,64 @@ test("ensureStreamReadiness surfaces content-policy diagnostics as terminal 400,
   assert.match(body.error.message, /content policy/i);
 });
 
+test("ensureStreamReadiness surfaces Devin Desktop resource_exhausted as terminal 429", async () => {
+  const warnings: string[] = [];
+  const response = new Response(
+    streamFromChunks([
+      `data: ${JSON.stringify({
+        error: {
+          message:
+            "Devin Desktop stream error: resource_exhausted: Reached overall message " +
+            "rate limit. Please try again later. Your limit will reset in 16 minutes.",
+        },
+      })}\n\n`,
+    ]),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+
+  const result = await ensureStreamReadiness(response, {
+    timeoutMs: 100,
+    provider: "devin-desktop",
+    model: "swe-1-7",
+    log: { warn: (_tag, message) => warnings.push(message) },
+  });
+
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("error-only SSE payload must remain a readiness failure");
+  assert.equal(result.response.status, 429);
+  assert.equal(result.code, "rate_limit_exceeded");
+  assert.equal(result.type, "rate_limit_error");
+  assert.match(result.reason, /resource_exhausted/i);
+});
+
+test("ensureStreamReadiness surfaces context-length diagnostics as terminal 400", async () => {
+  const response = new Response(
+    streamFromChunks([
+      `data: ${JSON.stringify({
+        error: {
+          message:
+            "Devin Desktop stream error: invalid_request_error: Your prompt is too long: " +
+            "263045 tokens > 262000 maximum context length.",
+        },
+      })}\n\n`,
+    ]),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+
+  const result = await ensureStreamReadiness(response, {
+    timeoutMs: 100,
+    provider: "devin-desktop",
+    model: "swe-1-7",
+  });
+
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("error-only SSE payload must remain a readiness failure");
+  assert.equal(result.response.status, 400);
+  assert.equal(result.code, "context_length_exceeded");
+  assert.equal(result.type, "invalid_request_error");
+  assert.match(result.reason, /too long/i);
+});
+
 test("stream-readiness diagnostics cannot reclassify Antigravity account exhaustion (#8972)", () => {
   const classificationError = "Stream ended before producing a non-ping SSE event";
   const diagnostic = "UPSTREAM_DETAIL quota exhausted; retry after 2s; empty content";

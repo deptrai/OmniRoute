@@ -414,6 +414,29 @@ function classifyTerminalStreamDiagnostic(
   ) {
     return { status: 400, code: "content_policy_violation", type: "invalid_request_error" };
   }
+
+  // Input-bound / context-length failures are deterministic per payload and should
+  // keep their 400 status, not be retried as 502 transport errors.
+  if (
+    /context length|prompt is too long|maximum context length|too many tokens|tokens exceeds|exceeds .* maximum context/i.test(
+      diagnostic
+    )
+  ) {
+    return { status: 400, code: "context_length_exceeded", type: "invalid_request_error" };
+  }
+
+  // Devin Desktop / Codeium surface rate-limit exhaustion as the only SSE
+  // event (resource_exhausted: "Reached overall message rate limit. Your
+  // limit will reset in N minutes."). Without this, the stream ends with no
+  // non-ping event and we spuriously return 502, causing same-account retries
+  // and provider-circuit breaker trips. Preserve the upstream 4xx status.
+  if (
+    /resource_exhausted|rate[_\s]?limit|reached .* (?:rate|message)\s*limit|limit will reset|limit has been reached/i.test(
+      diagnostic
+    )
+  ) {
+    return { status: 429, code: "rate_limit_exceeded", type: "rate_limit_error" };
+  }
   return null;
 }
 

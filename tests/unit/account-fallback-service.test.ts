@@ -119,6 +119,14 @@ test("parseRetryFromErrorText caps extreme reset windows at 30 days", () => {
   assert.equal(parseRetryFromErrorText("Resets in 999999h"), thirtyDaysMs);
 });
 
+test("parseRetryFromErrorText parses whole-word reset countdowns", () => {
+  assert.equal(parseRetryFromErrorText("Your limit will reset in 16 minutes"), 960_000);
+  assert.equal(parseRetryFromErrorText("Resets in 2 hours"), 7_200_000);
+  assert.equal(parseRetryFromErrorText("It will reset in 1 day"), 86_400_000);
+  assert.equal(parseRetryFromErrorText("Limit will reset in 45 seconds"), 45_000);
+  assert.equal(parseRetryFromErrorText("No reset phrase"), null);
+});
+
 test("checkFallbackError locks Antigravity quota-reached 429 for the full reset window", () => {
   const message =
     "Individual quota reached. Contact your administrator to enable overages. " +
@@ -2024,7 +2032,7 @@ test("checkFallbackError: compatible node empty wallet without billing-suspend p
     "You have insufficient balance, please recharge your account",
     0,
     null,
-    MOONSHOT_COMPAT,
+    MOONSHOT_COMPAT
   );
   assert.equal(result.creditsExhausted, true);
   assert.equal(result.reason, RateLimitReason.QUOTA_EXHAUSTED);
@@ -2038,11 +2046,22 @@ test("isDailyQuotaExhausted detects organization TPD rate limit", () => {
 
 test("checkFallbackError: TPD with node clock uses that instant, not host midnight", () => {
   const now = Date.parse("2026-09-02T07:30:00Z");
-  const result = checkFallbackError(429, MOONSHOT_TPD, 0, null, MOONSHOT_COMPAT, null, null, null, null, {
-    timezone: "Asia/Shanghai",
-    hour: 0,
-    nowMs: now,
-  });
+  const result = checkFallbackError(
+    429,
+    MOONSHOT_TPD,
+    0,
+    null,
+    MOONSHOT_COMPAT,
+    null,
+    null,
+    null,
+    null,
+    {
+      timezone: "Asia/Shanghai",
+      hour: 0,
+      nowMs: now,
+    }
+  );
   assert.equal(result.dailyQuotaExhausted, true);
   assert.equal(result.cooldownMs, Date.parse("2026-09-02T16:00:00Z") - now);
   assert.equal(result.reason, RateLimitReason.QUOTA_EXHAUSTED);

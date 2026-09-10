@@ -134,3 +134,52 @@ test("S4: End-to-end — checkFallbackError forwards provider+headers to classif
     "quota_exhausted must trigger fallback to the next provider"
   );
 });
+
+test("S5: Devin Desktop 429 resource_exhausted with reset countdown → parsed cooldown", async () => {
+  const { providerRuleRegistry, getProviderErrorRuleMatch } =
+    await import("../../open-sse/config/providerErrorRules.ts");
+
+  const rules = providerRuleRegistry.get("devin-desktop");
+  assert.ok(
+    rules && rules.length > 0,
+    "devin-desktop must be registered in the provider rule registry"
+  );
+
+  const body =
+    "Devin Desktop stream error: resource_exhausted: Reached overall message rate limit. " +
+    "Please try again later. Your limit will reset in 16 minutes.";
+  const match = getProviderErrorRuleMatch("devin-desktop", 429, {}, body);
+  assert.ok(match, "devin-desktop rule must match resource_exhausted with a reset countdown");
+  assert.equal(match.reason, "quota_exhausted");
+  assert.equal(match.scope, "connection");
+  assert.equal(match.cooldownMs, 16 * 60 * 1000);
+});
+
+test("S6: Devin Desktop 429 resource_exhausted without reset phrase → sensible default cooldown", async () => {
+  const { getProviderErrorRuleMatch } = await import("../../open-sse/config/providerErrorRules.ts");
+
+  const body =
+    "Devin Desktop stream error: resource_exhausted: Reached overall message rate limit.";
+  const match = getProviderErrorRuleMatch("devin-desktop", 429, {}, body);
+  assert.ok(match, "devin-desktop rule must match resource_exhausted even without a reset hint");
+  assert.equal(match.reason, "rate_limit_exceeded");
+  assert.equal(match.scope, "connection");
+  assert.equal(match.cooldownMs, 2 * 60 * 1000);
+});
+
+test("S7: End-to-end — checkFallbackError forwards devin-desktop reset text to provider rules", () => {
+  const result = checkFallbackError(
+    429,
+    "resource_exhausted: Reached overall message rate limit. Your limit will reset in 14 minutes.",
+    0,
+    null,
+    "devin-desktop",
+    null,
+    null,
+    null
+  );
+
+  assert.equal(result.shouldFallback, true);
+  assert.equal(result.reason, RateLimitReason.QUOTA_EXHAUSTED);
+  assert.equal(result.cooldownMs, 14 * 60 * 1000);
+});
