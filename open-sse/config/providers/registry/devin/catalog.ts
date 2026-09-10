@@ -103,6 +103,9 @@ export const DEVIN_MODEL_CATALOG: RegistryModel[] = [
     ["low", "Low"],
   ]),
 
+  model("swe-2-max", "SWE-2 Max", 128_000, 262_000),
+  model("swe-2-medium", "SWE-2 Medium", 128_000, 262_000),
+  model("swe-2-high", "SWE-2 High", 128_000, 262_000),
   model("swe-1-7", "SWE-1.7 Max", 128_000, 262_000),
   model("swe-1-7-medium", "SWE-1.7 Medium", 128_000, 262_000),
   model("swe-1-7-lightning", "SWE-1.7 Lightning Max", 96_000, 202_752),

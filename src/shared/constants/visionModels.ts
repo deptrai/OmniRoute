@@ -55,6 +55,7 @@ export const VISION_MODEL_ID_FRAGMENTS = [
   "claude-haiku-4",
   "claude-opus-5",
   "claude-sonnet-5",
+  "swe-2",
   "swe-1.7",
   "swe-1-7",
   "swe-1.6",

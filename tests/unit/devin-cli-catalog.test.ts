@@ -17,7 +17,7 @@ test("Devin transports expose the same curated catalog without duplicate ids", (
     devin_cli_agenticProvider.models.map((model) => model.id),
     catalogIds
   );
-  assert.equal(catalogIds.length, 110);
+  assert.equal(catalogIds.length, 113);
   assert.equal(new Set(catalogIds).size, catalogIds.length);
   assert.ok(catalogIds.every((id) => !id.toLowerCase().includes("byok")));
 });
@@ -37,6 +37,9 @@ test("Devin catalog contains only the operator-selected model families", () => {
     "kimi-k2-7",
     "glm-5-3-max",
     "glm-5-3-flash-max",
+    "swe-2-max",
+    "swe-2-medium",
+    "swe-2-high",
     "swe-1-7",
     "swe-1-7-lightning",
     "adaptive",

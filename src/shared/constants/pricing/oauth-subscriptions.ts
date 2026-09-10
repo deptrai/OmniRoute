@@ -500,6 +500,21 @@ export const DEFAULT_PRICING_OAUTH = {
   // SWE-1.7 Lightning: $2.5 Input / $1 Cached / $12.5 Output per 1M tokens.
   // SWE-1.7 (non-Lightning): half of Lightning price ($1.25 / $0.5 / $6.25).
   "devin-desktop": {
+    "swe-2-max": {
+      input: 1.25,
+      output: 6.25,
+      cached: 0.5,
+    },
+    "swe-2-medium": {
+      input: 1.25,
+      output: 6.25,
+      cached: 0.5,
+    },
+    "swe-2-high": {
+      input: 1.25,
+      output: 6.25,
+      cached: 0.5,
+    },
     "swe-1-7-lightning": {
       input: 2.5,
       output: 12.5,
@@ -517,6 +532,21 @@ export const DEFAULT_PRICING_OAUTH = {
 
   // ── Windsurf (same Codeium SWE catalog, different OAuth surface) ──────────
   windsurf: {
+    "swe-2-max": {
+      input: 1.25,
+      output: 6.25,
+      cached: 0.5,
+    },
+    "swe-2-medium": {
+      input: 1.25,
+      output: 6.25,
+      cached: 0.5,
+    },
+    "swe-2-high": {
+      input: 1.25,
+      output: 6.25,
+      cached: 0.5,
+    },
     "swe-1-7-lightning": {
       input: 2.5,
       output: 12.5,

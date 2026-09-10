@@ -83,6 +83,11 @@ export const DEVIN_MODEL_PRICING: Record<string, DevinTokenPricing> = {
     output: 0.5,
   }),
 
+  ...priced(["swe-2-max", "swe-2-medium", "swe-2-high"], {
+    input: 0.5,
+    cached: 0.2,
+    output: 2.5,
+  }),
   ...priced(["swe-1-7", "swe-1-7-medium"], {
     input: 0.5,
     cached: 0.2,
