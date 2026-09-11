@@ -234,6 +234,11 @@ export function shouldRecordProviderBreakerFailure(args: {
 
 const REQUEST_SCOPED_UPSTREAM_ERROR_CODES: Record<string, true> = {
   context_length_exceeded: true,
+  // Content-policy rejections are deterministic for the payload — the same
+  // prompt fails identically on every account, so they must not cool a
+  // connection, lock a model, or trip the provider breaker. The combo may
+  // still fall through to a different provider whose policy accepts it.
+  content_policy_violation: true,
   upstream_empty_response: true,
   upstream_response_failed: true,
   // Local combo per-target timer (targetTimeoutRunner) — not a connection health signal.

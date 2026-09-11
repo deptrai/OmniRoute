@@ -788,9 +788,11 @@ test("ensureStreamReadiness surfaces content-policy diagnostics as terminal 400,
   const body = (await result.response.json()) as {
     error: { message: string; code: string; type: string };
   };
-  // Public-safe projection: the wire code is the generic 400 identifier; the
-  // internal struct still carries `content_policy_violation` for retry gating.
-  assert.equal(body.error.code, "bad_request");
+  // The classified identifier survives the public boundary so downstream
+  // combo/connection logic can treat it as request-scoped (deterministic
+  // per-payload) instead of a generic 400/502 provider failure.
+  assert.equal(body.error.code, "content_policy_violation");
+  assert.equal(body.error.type, "invalid_request_error");
   assert.match(body.error.message, /content policy/i);
 });
 

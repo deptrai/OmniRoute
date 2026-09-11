@@ -41,6 +41,7 @@ import {
 } from "../../shared/utils/circuitBreaker";
 import { classify429FromError, type FailureKind } from "../../shared/utils/classify429";
 import { resolveUseUpstream429BreakerHints } from "../../shared/utils/providerHints";
+import { isRequestScopedUpstreamFailure } from "./comboFailureLogging";
 
 import { logProxyEvent } from "../../lib/proxyLogger";
 import { logTranslationEvent } from "../../lib/translatorEvents";
@@ -537,7 +538,15 @@ export async function executeChatWithBreaker({
                 Number(failure?.status) === 499 ||
                 failure?.code === "client_disconnected" ||
                 failure?.type === "client_disconnected" ||
-                isLocalStreamLifecycleError(failure?.message ?? failure) // client abort, #4602
+                isLocalStreamLifecycleError(failure?.message ?? failure) || // client abort, #4602
+                // Deterministic per-payload rejections (e.g. Devin
+                // content-policy) say nothing about connection health —
+                // cooling the account here would poison it for unrelated
+                // prompts and feed protected-target combo 503s.
+                isRequestScopedUpstreamFailure({
+                  code: failure?.code,
+                  type: failure?.type,
+                })
               ) {
                 return;
               }

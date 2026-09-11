@@ -161,6 +161,42 @@ function looksLikeStreamRateLimit(code: string, type: string, message: string): 
   );
 }
 
+// Executors classify deterministic upstream rejections into error.code/error.type
+// before emitting them mid-stream (e.g. Devin Desktop emits
+// {code:"content_policy_violation", type:"invalid_request_error"} for a
+// permission_denied trailer), but buildErrorBody() carries no HTTP status field
+// across the SSE hop. Without this map the mid-stream normalizer collapsed every
+// classified 4xx to 502 — which then fed connection cooldowns, the provider
+// circuit breaker, and false "server_error" call-log rows.
+const CLASSIFIED_STREAM_FAILURE_STATUS: Record<string, number> = {
+  content_policy_violation: 400,
+  content_filter: 400,
+  context_length_exceeded: 400,
+  context_window_exceeded: 400,
+  prompt_too_long: 400,
+  invalid_request_error: 400,
+  invalid_api_key: 401,
+  unauthenticated: 401,
+  authentication_error: 401,
+  permission_denied: 403,
+  permission_error: 403,
+  not_found: 404,
+  not_found_error: 404,
+  model_not_found: 404,
+  rate_limit_exceeded: 429,
+  rate_limit_error: 429,
+  insufficient_quota: 429,
+  quota_exceeded: 429,
+  usage_limit_reached: 429,
+};
+
+function classifiedStreamFailureStatus(code: string, type?: string): number | null {
+  return (
+    CLASSIFIED_STREAM_FAILURE_STATUS[code.toLowerCase()] ??
+    (type ? (CLASSIFIED_STREAM_FAILURE_STATUS[type.toLowerCase()] ?? null) : null)
+  );
+}
+
 export function normalizeStreamFailurePayload(payload: unknown): StreamFailurePayload | null {
   const record = payload && typeof payload === "object" ? (payload as JsonRecord) : {};
   const response = asRecord(record.response);
@@ -195,6 +231,9 @@ export function normalizeStreamFailurePayload(payload: unknown): StreamFailurePa
     toStreamFailureStatus(response.status) ??
     toStreamFailureStatus(record.status_code) ??
     toStreamFailureStatus(record.status) ??
+    // Classified code/type (the executor's explicit verdict) beats message-text
+    // heuristics — a content-policy message may still contain the word "limit".
+    classifiedStreamFailureStatus(code, type) ??
     (looksLikeStreamRateLimit(code, type || "", message) ? 429 : 502);
 
   return {
