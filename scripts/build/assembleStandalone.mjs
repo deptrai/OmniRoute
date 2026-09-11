@@ -225,6 +225,14 @@ const EXTRA_MODULE_ENTRIES = [
     dest: ["head-response-guard.cjs"],
   },
   {
+    // Process crash guard (server-ws.mjs dependency): swallows benign
+    // client-abort + already-recorded stream-failure errors so they never
+    // reach uncaughtException/unhandledRejection and kill the process.
+    label: "http client-abort crash guard (server-ws.mjs dependency)",
+    src: ["src", "shared", "utils", "httpClientAbortGuard.mjs"],
+    dest: ["http-client-abort-guard.mjs"],
+  },
+  {
     label: "responses-ws-proxy (server-ws.mjs dependency)",
     src: ["scripts", "dev", "responses-ws-proxy.mjs"],
     dest: ["responses-ws-proxy.mjs"],

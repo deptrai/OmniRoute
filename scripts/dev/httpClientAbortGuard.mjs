@@ -11,6 +11,7 @@
 
 export {
   isClientAbortError,
+  isRecordedStreamFailureError,
   shouldSwallowUncaught,
   attachRequestStreamGuards,
   installProcessCrashGuard,

@@ -39,6 +39,9 @@ export const APP_STAGING_ALLOWED_EXACT_PATHS: string[] = [
   // this bare entry the prepublish prune deleted it → every `omniroute` boot of the
   // published 3.8.47 crashed with ERR_MODULE_NOT_FOUND (same class as tls-options/3.8.41).
   "head-response-guard.cjs",
+  // server-ws.mjs import (process crash guard) — enforced by the closure test
+  // tests/unit/pack-artifact-server-ws-closure.test.ts.
+  "http-client-abort-guard.mjs",
   "http-method-guard.cjs",
   "open-sse/mcp-server/server.js",
   "open-sse/vendor/codex-chatgpt-web/adapters/chatgpt-web/mcp-server.js",
@@ -202,6 +205,9 @@ export const PACK_ARTIFACT_REQUIRED_PATHS: string[] = [
   "dist/tls-options.mjs",
   // #7065: regression guard for the HEAD response guard (dist/server-ws.mjs import).
   "dist/head-response-guard.cjs",
+  // server-ws.mjs import — regression guard so the tarball can never silently
+  // lose the process crash guard (same #7065 class as head-response-guard).
+  "dist/http-client-abort-guard.mjs",
   "dist/webdav-handler.mjs",
   "bin/cli/program.mjs",
   // Direct imports of bin/omniroute.mjs — bin/cli/ is only an allowlist PREFIX, so a

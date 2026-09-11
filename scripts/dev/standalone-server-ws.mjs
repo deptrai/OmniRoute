@@ -9,6 +9,10 @@ import headResponseGuard from "./head-response-guard.cjs";
 import { resolveTlsOptions, createServerListener } from "./tls-options.mjs";
 import { getMainServerTimeoutConfig } from "./main-server-timeouts.mjs";
 import { createSystemdNotifier } from "./systemd-notify.mjs";
+import {
+  installProcessCrashGuard,
+  attachRequestStreamGuards,
+} from "./http-client-abort-guard.mjs";
 
 // systemd sd_notify (Type=notify / WatchdogSec=): this process is the one
 // whose event loop can freeze (cold /v1/models rebuild), so it must own the
@@ -16,6 +20,12 @@ import { createSystemdNotifier } from "./systemd-notify.mjs";
 // service. No-op outside systemd (no NOTIFY_SOCKET).
 const systemdNotifier = createSystemdNotifier();
 let systemdReadySent = false;
+// Last-resort safety net (same guard the dev entry run-next.mjs installs):
+// benign client-abort errors and already-recorded stream failures
+// (__omniroutePendingRequestCleared — see http-client-abort-guard.mjs) are
+// swallowed instead of reaching uncaughtException/unhandledRejection and
+// killing every in-flight request. Genuine bugs still crash loudly.
+installProcessCrashGuard();
 // NOTE: if an operator sets NEXT_MANUAL_SIG_HANDLE=1, Next never registers its
 // own signal cleanup and these once() handlers would suppress Node's default
 // signal exit (process lingers until systemd's stop-timeout SIGKILL). Nothing
@@ -131,6 +141,17 @@ function wrapUpgradeListener(server, listener) {
 }
 
 /**
+ * Wrap a request listener so every request/response pair gets the client-abort
+ * stream guards attached before any inner layer runs (mirrors run-next.mjs).
+ */
+function wrapRequestListenerWithStreamGuards(listener) {
+  return function streamGuardedRequestHandler(req, res) {
+    attachRequestStreamGuards(req, res);
+    return listener.call(this, req, res);
+  };
+}
+
+/**
  * Wrap a request listener so WebDAV requests at /api/v1/webdav are handled
  * before the peer-stamp/Next.js layer sees them.
  * Returns true if the request was handled; the wrapped listener is never called.
@@ -161,9 +182,11 @@ http.createServer = function createServerWithResponsesWs(...args) {
     // Method guard runs before Next because Next 16 rejects TRACE while constructing requests.
     // Head-response guard wraps outermost so it sees (and can force-close) every
     // HEAD request regardless of which inner layer ends up handling it (#6400).
-    args[lastFnIdx] = wrapRequestListenerWithHeadResponseGuard(
-      wrapRequestListenerWithMethodGuard(
-        wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(args[lastFnIdx]))
+    args[lastFnIdx] = wrapRequestListenerWithStreamGuards(
+      wrapRequestListenerWithHeadResponseGuard(
+        wrapRequestListenerWithMethodGuard(
+          wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(args[lastFnIdx]))
+        )
       )
     );
   }
@@ -196,9 +219,11 @@ http.createServer = function createServerWithResponsesWs(...args) {
     if (eventName === "request" && typeof listener === "function") {
       return originalOn(
         eventName,
-        wrapRequestListenerWithHeadResponseGuard(
-          wrapRequestListenerWithMethodGuard(
-            wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(listener))
+        wrapRequestListenerWithStreamGuards(
+          wrapRequestListenerWithHeadResponseGuard(
+            wrapRequestListenerWithMethodGuard(
+              wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(listener))
+            )
           )
         )
       );
@@ -213,9 +238,11 @@ http.createServer = function createServerWithResponsesWs(...args) {
     if (eventName === "request" && typeof listener === "function") {
       return originalAddListener(
         eventName,
-        wrapRequestListenerWithHeadResponseGuard(
-          wrapRequestListenerWithMethodGuard(
-            wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(listener))
+        wrapRequestListenerWithStreamGuards(
+          wrapRequestListenerWithHeadResponseGuard(
+            wrapRequestListenerWithMethodGuard(
+              wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(listener))
+            )
           )
         )
       );

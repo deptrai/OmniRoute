@@ -22,8 +22,9 @@
  *      inside every `http.createServer((req, res) => …)` request listener.
  *   2. `installProcessCrashGuard()` — a last-resort safety net on
  *      `process.on('uncaughtException' | 'unhandledRejection')` that swallows
- *      the same benign client-abort errors but otherwise preserves the existing
- *      crash semantics (so genuine bugs still surface). Idempotent.
+ *      the same benign client-abort errors plus already-recorded stream-failure
+ *      errors (see `isRecordedStreamFailureError`), but otherwise preserves the
+ *      existing crash semantics (so genuine bugs still surface). Idempotent.
  *
  * Kept as a `.mjs` module (no build step) so it is importable both from the
  * Node-only dev server (`scripts/dev/run-next.mjs`) and from the TypeScript
@@ -64,8 +65,31 @@ export function isClientAbortError(err) {
 }
 
 /**
+ * A stream-failure error whose per-request accounting is already complete.
+ * `open-sse/utils/stream.ts` tags every error passed to
+ * `TransformStreamDefaultController.error()` with
+ * `__omniroutePendingRequestCleared` — by that point the call log, the
+ * onFailure/onComplete callbacks and the pending-request counter have all
+ * been settled, and the failure was already forwarded to the consumer as an
+ * in-band SSE error frame. When the consumer abandons the errored readable
+ * without draining it (e.g. a combo quality-peek that fails the target over
+ * to the next model), the pipe machinery still rejects with this tagged
+ * error — residual noise, not a dropped failure. Swallowing it keeps a
+ * deterministic upstream rejection from crashing the whole process (and
+ * every other in-flight request with it).
+ */
+export function isRecordedStreamFailureError(err) {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    /** @type {Record<string, unknown>} */ (err).__omniroutePendingRequestCleared === true
+  );
+}
+
+/**
  * Decide whether a process-level uncaughtException/unhandledRejection should be
- * swallowed (benign client-abort) or allowed to surface (genuine bug).
+ * swallowed (benign client-abort or already-recorded stream failure) or
+ * allowed to surface (genuine bug).
  *
  * Pure + exported so it can be unit-tested without poking process listeners.
  *
@@ -75,7 +99,7 @@ export function isClientAbortError(err) {
  * @returns {boolean} true => swallow (log only), false => re-throw / let crash.
  */
 export function shouldSwallowUncaught(err, origin) {
-  if (!isClientAbortError(err)) return false;
+  if (!isClientAbortError(err) && !isRecordedStreamFailureError(err)) return false;
   // Only swallow when the origin matches what the guard installed for. If some
   // other subsystem raised it (e.g. a deliberate `throw` in a domain), keep the
   // existing crash semantics.

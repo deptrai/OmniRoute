@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   isClientAbortError,
+  isRecordedStreamFailureError,
   shouldSwallowUncaught,
   attachRequestStreamGuards,
   installProcessCrashGuard,
@@ -20,12 +21,14 @@ import * as sharedGuard from "../../src/shared/utils/httpClientAbortGuard.mjs";
 // (single source of truth, no drift).
 test("scripts/dev guard re-exports the shared src implementation (single source of truth)", () => {
   assert.equal(isClientAbortError, sharedGuard.isClientAbortError);
+  assert.equal(isRecordedStreamFailureError, sharedGuard.isRecordedStreamFailureError);
   assert.equal(shouldSwallowUncaught, sharedGuard.shouldSwallowUncaught);
   assert.equal(attachRequestStreamGuards, sharedGuard.attachRequestStreamGuards);
   assert.equal(installProcessCrashGuard, sharedGuard.installProcessCrashGuard);
   // And the shared module exposes everything the TS servers rely on.
   for (const name of [
     "isClientAbortError",
+    "isRecordedStreamFailureError",
     "shouldSwallowUncaught",
     "attachRequestStreamGuards",
     "installProcessCrashGuard",
@@ -176,6 +179,37 @@ test("installProcessCrashGuard() with no logger swallows aborts instead of dying
   });
   assert.equal(status, 0, `child must survive benign aborts; stderr: ${stderr}`);
   assert.match(stdout, /ALIVE/);
+});
+
+test("shouldSwallowUncaught absorbs already-recorded stream-failure errors", () => {
+  // open-sse/utils/stream.ts tags every error passed to
+  // TransformStreamDefaultController.error() with this marker. When a combo
+  // quality-peek abandons the errored readable mid-failover, the pipe
+  // machinery surfaces a residual unhandledRejection carrying it — the
+  // failure was already logged + surfaced in-band, so the process must not
+  // die on it (previously crashed the whole dev/prod process, exit 7).
+  const tagged = Object.assign(new Error("upstream stream failure"), {
+    __omniroutePendingRequestCleared: true,
+  });
+  assert.equal(isRecordedStreamFailureError(tagged), true);
+  assert.equal(shouldSwallowUncaught(tagged, "unhandledRejection"), true);
+  assert.equal(shouldSwallowUncaught(tagged, "uncaughtException"), true);
+  assert.equal(shouldSwallowUncaught(tagged, undefined), true);
+});
+
+test("isRecordedStreamFailureError rejects untagged errors", () => {
+  assert.equal(isRecordedStreamFailureError(new Error("boom")), false);
+  assert.equal(isRecordedStreamFailureError(null), false);
+  assert.equal(
+    isRecordedStreamFailureError({ __omniroutePendingRequestCleared: false }),
+    false
+  );
+  // An untagged upstream error must keep crash semantics — only errors that
+  // already completed their per-request accounting are benign.
+  assert.equal(
+    shouldSwallowUncaught(new Error("upstream stream failure"), "unhandledRejection"),
+    false
+  );
 });
 
 test("installProcessCrashGuard still crashes on genuine errors (no over-swallowing)", async () => {
