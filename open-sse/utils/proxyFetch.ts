@@ -202,7 +202,15 @@ export function runWithAppliedProxyCapture<T>(sink: AppliedProxySink, fn: () => 
   return appliedProxyContext.run(sink, fn);
 }
 
-type FetchWithDispatcherOptions = RequestInit & { dispatcher?: unknown };
+type FetchWithDispatcherOptions = RequestInit & {
+  dispatcher?: unknown;
+  // Per-request override for the direct-egress response-start bound
+  // (OMNIROUTE_DIRECT_HEADERS_TIMEOUT_MS). Providers whose upstream legitimately
+  // needs a long time-to-first-byte (e.g. Devin Desktop SWE-2 on large prompts)
+  // pass a larger value so the shared stale-socket guard does not turn a slow
+  // upstream into a 502 + circuit-breaker trip. 0 disables the bound.
+  omniResponseStartTimeoutMs?: number;
+};
 type FetchWithDispatcher = (
   input: RequestInfo | URL,
   init?: FetchWithDispatcherOptions
@@ -758,6 +766,15 @@ async function patchedFetch(
   options: FetchWithDispatcherOptions = {},
   deps: ProxyFetchDeps = {}
 ) {
+  // Strip the OmniRoute-internal per-request response-start override before the
+  // options object reaches undici/native fetch init — it is not a RequestInit key
+  // and would also fail the TLS allowlist in isTlsRequestEligible.
+  const requestResponseStartTimeoutMs = options.omniResponseStartTimeoutMs;
+  if (requestResponseStartTimeoutMs !== undefined) {
+    const rest = { ...options };
+    delete rest.omniResponseStartTimeoutMs;
+    options = rest;
+  }
   // Explicit direct contexts must win even when a caller supplied a stale
   // dispatcher. Native fetch preserves direct streaming semantics.
   if (proxyContext.getStore() === DIRECT_PROXY_CONTEXT) {
@@ -847,7 +864,11 @@ async function patchedFetch(
     const _nativeFallback =
       (deps.nativeFetch as FetchWithDispatcher | undefined) ?? originalFetchWithDispatcher;
     let lastDispatcherError: unknown = null;
-    const directHeadersTimeoutMs = resolveDirectHeadersTimeoutMs();
+    const directHeadersTimeoutMs =
+      typeof requestResponseStartTimeoutMs === "number" &&
+      Number.isFinite(requestResponseStartTimeoutMs)
+        ? Math.max(0, Math.floor(requestResponseStartTimeoutMs))
+        : resolveDirectHeadersTimeoutMs();
     let targetHostForLogs = "";
     try {
       targetHostForLogs = new URL(targetUrl).host;

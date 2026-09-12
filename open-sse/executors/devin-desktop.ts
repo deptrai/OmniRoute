@@ -52,6 +52,19 @@ export function resolveDevinDesktopVersion(): string {
   return DEVIN_VERSION_PATTERN.test(override) ? override : VERIFIED_DEVIN_DESKTOP_VERSION;
 }
 
+// SWE-2 on large prompts legitimately needs >30s before the upstream sends
+// response headers. The shared 30s direct-egress bound (#10214, stale-socket
+// guard) was converting that slowness into 502s and tripping the provider
+// circuit breaker — give this transport a wider bound (env-overridable).
+const DEVIN_RESPONSE_START_TIMEOUT_DEFAULT_MS = 120_000;
+export function resolveDevinResponseStartTimeoutMs(): number {
+  const raw = process.env.DEVIN_DESKTOP_RESPONSE_START_TIMEOUT_MS?.trim() ?? "";
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : DEVIN_RESPONSE_START_TIMEOUT_DEFAULT_MS;
+}
+
 export function resolveDevinDesktopExtensionVersion(): string {
   const override = process.env.DEVIN_DESKTOP_EXTENSION_VERSION?.trim() ?? "";
   return DEVIN_VERSION_PATTERN.test(override) ? override : DEFAULT_DEVIN_EXTENSION_VERSION;
@@ -1016,7 +1029,8 @@ export class DevinDesktopExecutor extends BaseExecutor {
         headers,
         body: bodyArrayBuffer(framed),
         signal: signal ?? undefined,
-      });
+        omniResponseStartTimeoutMs: resolveDevinResponseStartTimeoutMs(),
+      } as RequestInit & { omniResponseStartTimeoutMs?: number });
     } catch (error) {
       const aborted = signal?.aborted === true;
       const safe = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
