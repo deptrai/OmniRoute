@@ -485,11 +485,26 @@ const DEVIN_CRITICAL_BUILTINS = new Set([
   "TaskCreate",
   "TaskUpdate",
   "TaskList",
+  "TaskGet",
+  "TaskOutput",
+  "TaskStop",
   "EnterWorktree",
   "ExitWorktree",
+  // Agent/subagent family — these MUST keep their full input schema even when
+  // the tools budget is nearly exhausted. If Agent arrives upstream with an
+  // empty schema the model emits calls with no arguments, and downstream
+  // schema repair then fabricates {"description":"","prompt":""}, spawning
+  // agents with an empty prompt (observed 2026-09-12 with 250+ tool defs).
+  "Agent",
+  "Task",
+  "SendMessage",
+  "TeamCreate",
+  "TeamDelete",
+  "EnterPlanMode",
+  "ExitPlanMode",
 ]);
 
-function convertTools(tools: unknown): DevinDesktopToolInput[] {
+export function convertTools(tools: unknown): DevinDesktopToolInput[] {
   if (!Array.isArray(tools) || tools.length === 0) return [];
   const allTools = sanitizeOpenAITools(tools) as OpenAIFunctionTool[];
   const result: DevinDesktopToolInput[] = [];

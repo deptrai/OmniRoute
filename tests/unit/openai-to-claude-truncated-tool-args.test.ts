@@ -276,3 +276,157 @@ test("schema-driven repair: missing required fields filled with type-correct emp
   // number→string coercion, "true"→boolean, missing required array filled
   assert.deepEqual(parsed, { taskId: "123", tags: [], active: true });
 });
+
+test("tool call with NO argument deltas but required schema fields emits error, not fabricated empties", () => {
+  // Reproduces the Devin Desktop empty-Agent-args incident: upstream emitted
+  // id+name only (its tools budget dropped the input_schema upstream, so the
+  // model did not know the params). Schema repair would otherwise fabricate
+  // {"description":"","prompt":""} and spawn an agent with an empty prompt.
+  const toolSchemas = new Map([
+    [
+      "Agent",
+      {
+        type: "object",
+        required: ["description", "prompt"],
+        properties: {
+          description: { type: "string" },
+          prompt: { type: "string" },
+          subagent_type: { type: "string" },
+        },
+      },
+    ],
+  ]);
+  const state = createState(toolSchemas);
+
+  // Single chunk: id+name, then finish — zero argument deltas.
+  openaiToClaudeResponse(
+    {
+      id: "chatcmpl-empty-1",
+      model: "swe-2-max",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              { index: 0, id: "Agent_20", type: "function", function: { name: "Agent" } },
+            ],
+          },
+        },
+      ],
+    },
+    state
+  );
+
+  const finish = flatten([
+    openaiToClaudeResponse(
+      {
+        id: "chatcmpl-empty-1",
+        model: "swe-2-max",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 10, completion_tokens: 20 },
+      },
+      state
+    ),
+  ]);
+
+  const errorEvent = finish.find((e) => e?.type === "error");
+  assert.ok(errorEvent, "expected terminal error for dropped tool-call arguments");
+  assert.equal(errorEvent.error.type, "api_error");
+  assert.equal(
+    finish.some(
+      (e) =>
+        e?.type === "content_block_delta" &&
+        e.delta?.type === "input_json_delta" &&
+        e.delta.partial_json.includes('"description"')
+    ),
+    false,
+    "must not fabricate required fields for a call whose arguments never arrived"
+  );
+});
+
+test("tool call with no arguments and NO required schema fields still emits {}", () => {
+  const toolSchemas = new Map([
+    [
+      "TaskList",
+      {
+        type: "object",
+        properties: { filter: { type: "string" } },
+      },
+    ],
+  ]);
+  const state = createState(toolSchemas);
+
+  openaiToClaudeResponse(
+    {
+      id: "chatcmpl-noargs-1",
+      model: "swe-2-max",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              { index: 0, id: "TaskList_1", type: "function", function: { name: "TaskList" } },
+            ],
+          },
+        },
+      ],
+    },
+    state
+  );
+
+  const finish = flatten([
+    openaiToClaudeResponse(
+      {
+        id: "chatcmpl-noargs-1",
+        model: "swe-2-max",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 10, completion_tokens: 20 },
+      },
+      state
+    ),
+  ]);
+
+  assert.equal(finish.some((e) => e?.type === "error"), false);
+  const delta = finish.find(
+    (e) => e?.type === "content_block_delta" && e.delta?.type === "input_json_delta"
+  );
+  assert.ok(delta, "expected corrective input_json_delta for shimmed/schema'd tool");
+  assert.deepEqual(JSON.parse(delta.delta.partial_json), {});
+});
+
+test("tool call with no arguments and no declared schema still closes normally", () => {
+  const state = createState();
+
+  openaiToClaudeResponse(
+    {
+      id: "chatcmpl-noschema-1",
+      model: "swe-2-max",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              { index: 0, id: "Custom_1", type: "function", function: { name: "Custom" } },
+            ],
+          },
+        },
+      ],
+    },
+    state
+  );
+
+  const finish = flatten([
+    openaiToClaudeResponse(
+      {
+        id: "chatcmpl-noschema-1",
+        model: "swe-2-max",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 10, completion_tokens: 20 },
+      },
+      state
+    ),
+  ]);
+
+  assert.equal(finish.some((e) => e?.type === "error"), false);
+  assert.ok(finish.some((e) => e?.type === "content_block_stop"));
+});

@@ -588,9 +588,24 @@ export function openaiToClaudeResponse(chunk, state) {
     // command. Emit a terminal error instead so the turn is retried.
     // Applies to every tool — sanitized tools would otherwise be "repaired"
     // into a wrong {}-ish call.
+    //
+    // The same applies when NO argument deltas arrived at all but the tool's
+    // declared schema requires parameters (observed: Devin Desktop emitting
+    // id+name-only tool calls after the tools payload budget dropped the
+    // tool's input_schema upstream). Schema repair would fabricate
+    // {"requiredField":""} placeholders — e.g. Agent spawned with an empty
+    // prompt — so treat it as dropped arguments and retry the turn.
     let truncatedArgs = false;
     for (const [, toolInfo] of state.toolCalls) {
-      if (!toolInfo.argBuffer) continue;
+      if (!toolInfo.argBuffer) {
+        const schema = lookupToolSchema(state, toolInfo.name);
+        const required = schema?.required;
+        if (Array.isArray(required) && required.length > 0) {
+          truncatedArgs = true;
+          break;
+        }
+        continue;
+      }
       try {
         JSON.parse(toolInfo.argBuffer);
       } catch {
@@ -604,7 +619,7 @@ export function openaiToClaudeResponse(chunk, state) {
         error: {
           type: "api_error",
           message:
-            "Upstream stream truncated tool-call arguments — the response was cut mid-call; retry the turn",
+            "Upstream stream produced a tool call with missing or truncated arguments — retry the turn",
         },
       });
       return results;
