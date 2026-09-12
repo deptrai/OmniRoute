@@ -70,8 +70,9 @@ export function isClientAbortError(err) {
  * `TransformStreamDefaultController.error()` with
  * `__omniroutePendingRequestCleared` — by that point the call log, the
  * onFailure/onComplete callbacks and the pending-request counter have all
- * been settled, and the failure was already forwarded to the consumer as an
- * in-band SSE error frame. When the consumer abandons the errored readable
+ * been settled (note: NOT every tagged path emits an in-band SSE error
+ * frame — e.g. the idle-timeout path tags `StreamIdleTimeoutError`
+ * without one). When the consumer abandons the errored readable
  * without draining it (e.g. a combo quality-peek that fails the target over
  * to the next model), the pipe machinery still rejects with this tagged
  * error — residual noise, not a dropped failure. Swallowing it keeps a
@@ -99,7 +100,15 @@ export function isRecordedStreamFailureError(err) {
  * @returns {boolean} true => swallow (log only), false => re-throw / let crash.
  */
 export function shouldSwallowUncaught(err, origin) {
-  if (!isClientAbortError(err) && !isRecordedStreamFailureError(err)) return false;
+  if (isRecordedStreamFailureError(err)) {
+    // The tag certifies per-request accounting completed — it says nothing
+    // about process health. Only the residual pipe-rejection channel
+    // (unhandledRejection) is benign; a tagged error surfacing as a real
+    // uncaughtException (synchronous rethrow, emitter 'error' with no
+    // listener) is a genuine crash and must stay fatal.
+    return !origin || origin === "unhandledRejection";
+  }
+  if (!isClientAbortError(err)) return false;
   // Only swallow when the origin matches what the guard installed for. If some
   // other subsystem raised it (e.g. a deliberate `throw` in a domain), keep the
   // existing crash semantics.
@@ -115,26 +124,38 @@ export function shouldSwallowUncaught(err, origin) {
  */
 export function attachRequestStreamGuards(req, res) {
   const flag = Symbol.for("omniroute.requestAbortGuard");
-  if (req[flag] || res[flag]) return;
-  req[flag] = true;
-  res[flag] = true;
+  // Check each stream independently: a previously-guarded req paired with a
+  // fresh res (or vice versa) must still get its own 'error' listener —
+  // skipping on `||` would leave the unflagged stream able to raise an
+  // uncaughtException.
+  if (!req[flag]) {
+    req[flag] = true;
+    req.on("error", (err) => {
+      if (!isClientAbortError(err)) {
+        // Re-emit a genuine request error through the normal channel so it is
+        // still observable in logs, but never as an uncaughtException.
+        console.error("[server] request stream error:", err);
+      }
+    });
+  }
 
-  req.on("error", (err) => {
-    if (!isClientAbortError(err)) {
-      // Re-emit a genuine request error through the normal channel so it is
-      // still observable in logs, but never as an uncaughtException.
-      console.error("[server] request stream error:", err);
-    }
-  });
-
-  res.on("error", (err) => {
-    if (!isClientAbortError(err)) {
-      console.error("[server] response stream error:", err);
-    }
-  });
+  if (!res[flag]) {
+    res[flag] = true;
+    res.on("error", (err) => {
+      if (!isClientAbortError(err)) {
+        console.error("[server] response stream error:", err);
+      }
+    });
+  }
 }
 
-let crashGuardInstalled = false;
+// Process-wide install flag: the standalone entry (server-ws.mjs) imports a
+// physically-copied module file while servers bundled inside server.js
+// (apiBridgeServer, liveServer, embedWsProxy) carry a second instance — a
+// module-scoped flag would register duplicate uncaughtException/
+// unhandledRejection pairs (double logs, extra listeners). A globalThis symbol
+// keeps installation truly once-per-process across module instances.
+const INSTALLED_FLAG = Symbol.for("omniroute.processCrashGuardInstalled");
 
 /**
  * Install process-level safety nets. Idempotent. Benign client-abort errors are
@@ -145,8 +166,9 @@ let crashGuardInstalled = false;
  * @param {(level: "warn" | "error", ...args: unknown[]) => void} [log]
  */
 export function installProcessCrashGuard(log) {
-  if (crashGuardInstalled) return;
-  crashGuardInstalled = true;
+  const globalFlag = /** @type {Record<symbol, unknown>} */ (globalThis);
+  if (globalFlag[INSTALLED_FLAG]) return;
+  globalFlag[INSTALLED_FLAG] = true;
 
   // `console` is an object, not a callable: `log ?? console` followed by
   // `logger("warn", ...)` throws TypeError and kills the process on the very

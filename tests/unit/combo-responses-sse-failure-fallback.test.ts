@@ -63,6 +63,48 @@ test("streaming quality rejects a pre-content top-level error envelope", async (
   assert.equal(result.reason, "streaming upstream error");
 });
 
+test("streaming quality surfaces the classified status/code of a pre-content error frame", async () => {
+  // Devin Desktop's content-policy rejection arrives as an error frame inside
+  // an HTTP-200 SSE stream. Without classified-status propagation the combo
+  // loop records a generic 502 quality_failure (feeding model lockout)
+  // instead of the honest 400 request-scoped verdict.
+  const body = [
+    "event: error",
+    `data: ${JSON.stringify({
+      error: {
+        code: "content_policy_violation",
+        type: "invalid_request_error",
+        message: "permission_denied: Your request was blocked by our content policy.",
+      },
+    })}`,
+    "",
+    "",
+  ].join("\n");
+
+  const result = await validateResponseQuality(sseResponse(body), true, silentLog());
+
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, "streaming upstream error");
+  assert.equal(result.status, 400);
+  assert.equal(result.code, "content_policy_violation");
+});
+
+test("unclassified streaming upstream errors keep the generic 502", async () => {
+  const body = [
+    "event: error",
+    `data: ${JSON.stringify({
+      error: { code: "upstream_error", message: "upstream connection failed" },
+    })}`,
+    "",
+    "",
+  ].join("\n");
+
+  const result = await validateResponseQuality(sseResponse(body), true, silentLog());
+
+  assert.equal(result.valid, false);
+  assert.equal(result.status, 502);
+});
+
 test("combo advances to the next target after a pre-content Responses SSE failure", async () => {
   const calls: string[] = [];
   const healthy = [

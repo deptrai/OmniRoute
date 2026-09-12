@@ -230,7 +230,10 @@ const EXTRA_MODULE_ENTRIES = [
     // reach uncaughtException/unhandledRejection and kill the process.
     label: "http client-abort crash guard (server-ws.mjs dependency)",
     src: ["src", "shared", "utils", "httpClientAbortGuard.mjs"],
-    dest: ["http-client-abort-guard.mjs"],
+    // Keep the source filename so `import "./httpClientAbortGuard.mjs"`
+    // resolves identically in dist/ (this copy) and in scripts/dev/ (the
+    // re-export shim) — standalone-server-ws.mjs must load it in both places.
+    dest: ["httpClientAbortGuard.mjs"],
   },
   {
     label: "responses-ws-proxy (server-ws.mjs dependency)",

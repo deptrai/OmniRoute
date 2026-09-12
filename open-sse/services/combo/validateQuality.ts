@@ -13,6 +13,7 @@ import {
   isOpenAIChoicesPayload,
 } from "../../utils/streamHelpers.ts";
 import { evaluateResponseValidation, type ResponseValidationConfig } from "./responseValidation.ts";
+import { normalizeStreamFailurePayload } from "../../utils/streamErrorFormat.ts";
 import { getReasoningTokens } from "../../../src/lib/usage/tokenAccounting.ts";
 import type { ComboRetryAfter } from "./types.ts";
 
@@ -280,7 +281,16 @@ export async function validateResponseQuality(
   isStreaming: boolean,
   log: { warn?: (...args: unknown[]) => void },
   responseValidation?: ResponseValidationConfig | null
-): Promise<{ valid: boolean; reason?: string; clonedResponse?: Response }> {
+): Promise<{
+  valid: boolean;
+  reason?: string;
+  clonedResponse?: Response;
+  // Classified detail of the upstream error frame that failed the peek, when
+  // one was parsed — lets callers record the honest status (e.g. a 400
+  // content-policy rejection) instead of collapsing it into a generic 502.
+  status?: number;
+  code?: string | null;
+}> {
   // Issue #3685: For Claude SSE streaming responses, use a BOUNDED PEEK to
   // detect the empty-content-block pattern (content_filter stop_reason with
   // no content_block_* events) WITHOUT de-streaming non-empty responses.
@@ -349,6 +359,10 @@ export async function validateResponseQuality(
     let sawTerminator = false;
     const sseLineNormalizer = createSSEDataLineNormalizer();
     let pendingEventType = "";
+    // The `data:` payload that tripped isStreamingUpstreamError — retained so
+    // the "streaming upstream error" rejection can carry its classified
+    // status/code back to the combo loop.
+    let upstreamErrorFrame: Record<string, unknown> | null = null;
 
     /**
      * Parse any complete SSE lines from `decodedSoFar`, updating lifecycle
@@ -426,6 +440,7 @@ export async function validateResponseQuality(
         pendingEventType = "";
 
         if (isStreamingUpstreamError(parsed, eventType)) {
+          upstreamErrorFrame = parsed;
           return "error";
         }
 
@@ -498,7 +513,15 @@ export async function validateResponseQuality(
               "COMBO",
               "Streaming response reported an upstream error before content — marking as invalid for combo failover"
             );
-            return { valid: false, reason: "streaming upstream error" };
+            const failure = upstreamErrorFrame
+              ? normalizeStreamFailurePayload(upstreamErrorFrame)
+              : null;
+            return {
+              valid: false,
+              reason: "streaming upstream error",
+              status: failure?.status,
+              code: failure?.code ?? null,
+            };
           }
 
           if (sse.hasMessageStart && sse.hasLifecycleEnd && !sse.hasRealContent) {
@@ -595,7 +618,13 @@ export async function validateResponseQuality(
             "COMBO",
             "Streaming response reported an upstream error before content — marking as invalid for combo failover"
           );
-          return { valid: false, reason: "streaming upstream error" };
+          const failure = upstreamErrorFrame ? normalizeStreamFailurePayload(upstreamErrorFrame) : null;
+          return {
+            valid: false,
+            reason: "streaming upstream error",
+            status: failure?.status,
+            code: failure?.code ?? null,
+          };
         }
 
         if (outcome === "content") {

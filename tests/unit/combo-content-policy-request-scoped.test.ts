@@ -94,6 +94,74 @@ test("content-policy 400 falls through to the next target and never trips the pr
   );
 });
 
+test("streaming pre-content error frame records the classified 400, not a 502 quality failure", async () => {
+  // The Devin failure mode in production: HTTP 200 SSE stream carrying an
+  // error frame BEFORE any content. The quality peek rejects it — and must
+  // propagate the classified status/code so the combo records 400 (scoped)
+  // instead of a generic 502 quality_failure that feeds model lockout.
+  const encoder = new TextEncoder();
+  const policyStream = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            [
+              "event: error",
+              `data: ${JSON.stringify({
+                error: {
+                  code: "content_policy_violation",
+                  type: "invalid_request_error",
+                  message: "permission_denied: blocked by content policy",
+                },
+              })}`,
+              "",
+              "",
+            ].join("\n")
+          )
+        );
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+  const healthyStream = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              choices: [{ delta: { content: "backup ok" }, finish_reason: "stop" }],
+            })}\n\ndata: [DONE]\n\n`
+          )
+        );
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+
+  const modelsCalled: string[] = [];
+  const result = await handleComboChat({
+    body: { stream: true, model: "test", messages: [{ role: "user", content: "hi" }] },
+    combo: makeCombo([{ model: "devin-desktop/swe-2-max" }, { model: "anthropic/backup" }]),
+    handleSingleModel: async (_body: unknown, modelStr: string) => {
+      modelsCalled.push(modelStr);
+      return modelStr === "devin-desktop/swe-2-max" ? policyStream : healthyStream;
+    },
+    log,
+    settings: {},
+    allCombos: [],
+  });
+
+  assert.equal(result.status, 200, "combo must fall through to the backup target");
+  assert.deepEqual(modelsCalled, ["devin-desktop/swe-2-max", "anthropic/backup"]);
+  assert.equal(
+    getCircuitBreaker("devin-desktop").getStatus().failureCount,
+    0,
+    "a classified per-prompt policy rejection must not feed provider health"
+  );
+});
+
 test("protected first target surfaces the real 400 instead of a masked breaker 503", async () => {
   const modelsCalled: string[] = [];
   const result = await handleComboChat({

@@ -41,7 +41,7 @@ export const APP_STAGING_ALLOWED_EXACT_PATHS: string[] = [
   "head-response-guard.cjs",
   // server-ws.mjs import (process crash guard) — enforced by the closure test
   // tests/unit/pack-artifact-server-ws-closure.test.ts.
-  "http-client-abort-guard.mjs",
+  "httpClientAbortGuard.mjs",
   "http-method-guard.cjs",
   "open-sse/mcp-server/server.js",
   "open-sse/vendor/codex-chatgpt-web/adapters/chatgpt-web/mcp-server.js",
@@ -207,7 +207,7 @@ export const PACK_ARTIFACT_REQUIRED_PATHS: string[] = [
   "dist/head-response-guard.cjs",
   // server-ws.mjs import — regression guard so the tarball can never silently
   // lose the process crash guard (same #7065 class as head-response-guard).
-  "dist/http-client-abort-guard.mjs",
+  "dist/httpClientAbortGuard.mjs",
   "dist/webdav-handler.mjs",
   "bin/cli/program.mjs",
   // Direct imports of bin/omniroute.mjs — bin/cli/ is only an allowlist PREFIX, so a

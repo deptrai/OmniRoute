@@ -193,8 +193,12 @@ test("shouldSwallowUncaught absorbs already-recorded stream-failure errors", () 
   });
   assert.equal(isRecordedStreamFailureError(tagged), true);
   assert.equal(shouldSwallowUncaught(tagged, "unhandledRejection"), true);
-  assert.equal(shouldSwallowUncaught(tagged, "uncaughtException"), true);
   assert.equal(shouldSwallowUncaught(tagged, undefined), true);
+  // The tag certifies per-request accounting completed — it does NOT make a
+  // genuine crash benign. A tagged error surfacing as a real uncaughtException
+  // (synchronous rethrow, emitter 'error' with no listener) must stay fatal;
+  // only the residual pipe-rejection channel is benign.
+  assert.equal(shouldSwallowUncaught(tagged, "uncaughtException"), false);
 });
 
 test("isRecordedStreamFailureError rejects untagged errors", () => {

@@ -1800,26 +1800,37 @@ async function handleComboChatInner({
               // Fix #1707: Set terminal state so the fallback doesn't emit
               // misleading ALL_ACCOUNTS_INACTIVE when the real issue is quality.
               lastError = `Upstream response failed quality validation: ${quality.reason}`;
-              lastStatus = 502;
+              // A peek-detected upstream error frame carries its classified
+              // status/code — record THAT (e.g. 400 content_policy_violation)
+              // instead of collapsing every quality rejection into 502.
+              const qualityStatus = quality.status ?? 502;
+              lastStatus = qualityStatus;
               // #10314: record quality failures as a FIRST-CLASS per-target outcome
               // so a quality reason is never silently dropped from the aggregated
               // terminal message when a later sibling overwrites lastError.
               comboErrors.push({
                 model: modelStr,
-                status: 502,
+                status: qualityStatus,
                 error: quality.reason || "upstream response failed quality validation",
                 kind: "quality",
               });
               if (i > 0) fallbackCount++;
               if (provider && rawModel) {
                 const mlSettings = resolveModelLockoutSettings(settings);
-                if (mlSettings.enabled && mlSettings.errorCodes.includes(502)) {
+                if (
+                  mlSettings.enabled &&
+                  mlSettings.errorCodes.includes(qualityStatus) &&
+                  // A request-scoped failure (content policy, prompt too long)
+                  // is deterministic for the payload — not a model-health
+                  // signal worth locking the model over.
+                  !isRequestScopedUpstreamFailure({ code: quality.code })
+                ) {
                   recordModelLockoutFailure(
                     provider,
                     target.connectionId || "",
                     rawModel,
                     "quality_failure",
-                    502,
+                    qualityStatus,
                     mlSettings.baseCooldownMs,
                     profile,
                     {
@@ -1843,7 +1854,10 @@ async function handleComboChatInner({
               return protectedPriorityTarget
                 ? {
                     ok: false,
-                    response: errorResponse(502, "Upstream response failed quality validation"),
+                    response: errorResponse(
+                      qualityStatus,
+                      "Upstream response failed quality validation"
+                    ),
                   }
                 : null;
             }
@@ -3600,10 +3614,13 @@ async function handleRoundRobinCombo({
               // Fix #1707: Set terminal state so the fallback doesn't emit
               // misleading ALL_ACCOUNTS_INACTIVE when the real issue is quality.
               lastError = `Upstream response failed quality validation: ${quality.reason}`;
-              lastStatus = 502;
+              // Same classified-status propagation as the priority loop: a
+              // peek-detected upstream error frame records its real status.
+              const rrQualityStatus = quality.status ?? 502;
+              lastStatus = rrQualityStatus;
               rrOutcomes.push({
                 model: modelStr,
-                status: 502,
+                status: rrQualityStatus,
                 error: quality.reason || "upstream response failed quality validation",
                 kind: "quality",
               });

@@ -325,7 +325,10 @@ export async function executeRuntimeUnitCombo(args: {
           });
           return { response, unit };
         }
-        lastResponse = errorResponse(502, "Upstream response failed quality validation");
+        lastResponse = errorResponse(
+          quality.status ?? 502,
+          "Upstream response failed quality validation"
+        );
       }
       if (lastResponse) {
         const quotaExhausted = await observeFailure(lastResponse, unit);

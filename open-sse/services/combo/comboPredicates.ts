@@ -239,6 +239,24 @@ const REQUEST_SCOPED_UPSTREAM_ERROR_CODES: Record<string, true> = {
   // connection, lock a model, or trip the provider breaker. The combo may
   // still fall through to a different provider whose policy accepts it.
   content_policy_violation: true,
+  // Same deterministic-per-prompt class: an input that violates a content
+  // filter, overflows the window, or is malformed fails identically on every
+  // connection — none of these are connection-health signals.
+  content_filter: true,
+  // Alternate spellings of the same per-payload policy rejection (kept in
+  // lockstep with CLASSIFIED_STREAM_FAILURE_STATUS in streamErrorFormat.ts —
+  // a classified 400 must never trip the provider breaker).
+  responsibleaipolicyviolation: true,
+  content_policy: true,
+  moderation_blocked: true,
+  blocked_by_policy: true,
+  safety: true,
+  context_window_exceeded: true,
+  prompt_too_long: true,
+  // Generic per-payload rejection code — already maps to 400 (which yields
+  // shouldFallback:false in checkFallbackError), so scoping it is the
+  // consistent verdict rather than a new cooldown decision.
+  invalid_request_error: true,
   upstream_empty_response: true,
   upstream_response_failed: true,
   // Local combo per-target timer (targetTimeoutRunner) — not a connection health signal.
@@ -261,7 +279,9 @@ export function isRequestScopedUpstreamFailure(error?: {
   const type = typeof error?.type === "string" ? error.type.toLowerCase() : "";
   return (
     REQUEST_SCOPED_UPSTREAM_ERROR_CODES[code] === true ||
-    type === "context_length_exceeded" ||
+    // Some providers carry the classified identifier in `type` instead of
+    // `code` (e.g. {code:"upstream_error", type:"content_policy_violation"}).
+    REQUEST_SCOPED_UPSTREAM_ERROR_CODES[type] === true ||
     type === "local_queue_capacity"
   );
 }

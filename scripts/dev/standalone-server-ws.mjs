@@ -9,10 +9,15 @@ import headResponseGuard from "./head-response-guard.cjs";
 import { resolveTlsOptions, createServerListener } from "./tls-options.mjs";
 import { getMainServerTimeoutConfig } from "./main-server-timeouts.mjs";
 import { createSystemdNotifier } from "./systemd-notify.mjs";
+// The specifier must resolve in BOTH layouts: in dist/ the assemble step ships
+// the real module under this exact name, while in scripts/dev/ this resolves
+// to the re-export shim (./httpClientAbortGuard.mjs → src/shared/utils). Using
+// the dist-only kebab name here would make `node standalone-server-ws.mjs`
+// boot-crash with ERR_MODULE_NOT_FOUND (#7065/3.8.47 class).
 import {
   installProcessCrashGuard,
   attachRequestStreamGuards,
-} from "./http-client-abort-guard.mjs";
+} from "./httpClientAbortGuard.mjs";
 
 // systemd sd_notify (Type=notify / WatchdogSec=): this process is the one
 // whose event loop can freeze (cold /v1/models rebuild), so it must own the
@@ -22,7 +27,7 @@ const systemdNotifier = createSystemdNotifier();
 let systemdReadySent = false;
 // Last-resort safety net (same guard the dev entry run-next.mjs installs):
 // benign client-abort errors and already-recorded stream failures
-// (__omniroutePendingRequestCleared — see http-client-abort-guard.mjs) are
+// (__omniroutePendingRequestCleared — see httpClientAbortGuard.mjs) are
 // swallowed instead of reaching uncaughtException/unhandledRejection and
 // killing every in-flight request. Genuine bugs still crash loudly.
 installProcessCrashGuard();
@@ -210,6 +215,8 @@ http.createServer = function createServerWithResponsesWs(...args) {
   server.headersTimeout = mainServerTimeouts.headersTimeoutMs;
   const originalOn = server.on.bind(server);
   const originalAddListener = server.addListener.bind(server);
+  const originalPrependListener = server.prependListener.bind(server);
+  const originalPrependOnceListener = server.prependOnceListener.bind(server);
 
   server.on = function patchedOn(eventName, listener) {
     if (eventName === "upgrade" && typeof listener === "function") {
@@ -248,6 +255,39 @@ http.createServer = function createServerWithResponsesWs(...args) {
       );
     }
     return originalAddListener(eventName, listener);
+  };
+
+  // Handlers attached via prependListener/prependOnceListener must get the
+  // same wrap chain — `once()` delegates to the patched on(), but the prepend
+  // variants do not, so without these their req/res 'error' events would lack
+  // the abort guards (and the request would skip peer-stamp/method/head).
+  const wrapRequestListenerForAttach = (listener) =>
+    wrapRequestListenerWithStreamGuards(
+      wrapRequestListenerWithHeadResponseGuard(
+        wrapRequestListenerWithMethodGuard(
+          wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(listener))
+        )
+      )
+    );
+
+  server.prependListener = function patchedPrependListener(eventName, listener) {
+    if (eventName === "upgrade" && typeof listener === "function") {
+      return originalPrependListener(eventName, wrapUpgradeListener(server, listener));
+    }
+    if (eventName === "request" && typeof listener === "function") {
+      return originalPrependListener(eventName, wrapRequestListenerForAttach(listener));
+    }
+    return originalPrependListener(eventName, listener);
+  };
+
+  server.prependOnceListener = function patchedPrependOnceListener(eventName, listener) {
+    if (eventName === "upgrade" && typeof listener === "function") {
+      return originalPrependOnceListener(eventName, wrapUpgradeListener(server, listener));
+    }
+    if (eventName === "request" && typeof listener === "function") {
+      return originalPrependOnceListener(eventName, wrapRequestListenerForAttach(listener));
+    }
+    return originalPrependOnceListener(eventName, listener);
   };
 
   // sd_notify READY once the main listener is actually accepting, then arm

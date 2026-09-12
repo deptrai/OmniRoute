@@ -171,6 +171,15 @@ function looksLikeStreamRateLimit(code: string, type: string, message: string): 
 const CLASSIFIED_STREAM_FAILURE_STATUS: Record<string, number> = {
   content_policy_violation: 400,
   content_filter: 400,
+  // Policy/safety rejections seen in the wild under other provider spellings
+  // (Azure surfaces ResponsibleAIPolicyViolation inside content_filter
+  // envelopes; some gateways emit moderation/policy codes directly). Normalized
+  // to lowercase before lookup, so ResponsibleAIPolicyViolation matches too.
+  responsibleaipolicyviolation: 400,
+  content_policy: 400,
+  moderation_blocked: 400,
+  blocked_by_policy: 400,
+  safety: 400,
   context_length_exceeded: 400,
   context_window_exceeded: 400,
   prompt_too_long: 400,
@@ -185,16 +194,24 @@ const CLASSIFIED_STREAM_FAILURE_STATUS: Record<string, number> = {
   model_not_found: 404,
   rate_limit_exceeded: 429,
   rate_limit_error: 429,
+  resource_exhausted: 429,
   insufficient_quota: 429,
   quota_exceeded: 429,
   usage_limit_reached: 429,
 };
 
 function classifiedStreamFailureStatus(code: string, type?: string): number | null {
-  return (
-    CLASSIFIED_STREAM_FAILURE_STATUS[code.toLowerCase()] ??
-    (type ? (CLASSIFIED_STREAM_FAILURE_STATUS[type.toLowerCase()] ?? null) : null)
-  );
+  // Object.hasOwn guards prototype-chain keys: a frame with
+  // code:"constructor"/"__proto__"/"toString" would otherwise read
+  // Object.prototype members off the plain-literal map and return a
+  // function/object as `status`.
+  const lookup = (key: string): number | null => {
+    const normalized = key.trim().toLowerCase();
+    return Object.hasOwn(CLASSIFIED_STREAM_FAILURE_STATUS, normalized)
+      ? CLASSIFIED_STREAM_FAILURE_STATUS[normalized]
+      : null;
+  };
+  return lookup(code) ?? (type ? lookup(type) : null);
 }
 
 export function normalizeStreamFailurePayload(payload: unknown): StreamFailurePayload | null {
@@ -231,10 +248,25 @@ export function normalizeStreamFailurePayload(payload: unknown): StreamFailurePa
     toStreamFailureStatus(response.status) ??
     toStreamFailureStatus(record.status_code) ??
     toStreamFailureStatus(record.status) ??
-    // Classified code/type (the executor's explicit verdict) beats message-text
+    // Classified `code` (the executor's explicit verdict) beats message-text
     // heuristics — a content-policy message may still contain the word "limit".
-    classifiedStreamFailureStatus(code, type) ??
-    (looksLikeStreamRateLimit(code, type || "", message) ? 429 : 502);
+    // The generic `type` umbrella (e.g. "invalid_request_error") is only
+    // consulted AFTER the rate-limit heuristic: a throttling frame whose code
+    // is unclassified but whose message says "limit reached" must stay 429,
+    // not collapse to 400 just because the umbrella type looks request-level.
+    classifiedStreamFailureStatus(code) ??
+    (looksLikeStreamRateLimit(code, type || "", message) ? 429 : null) ??
+    (type ? classifiedStreamFailureStatus(type) : null) ??
+    // A numeric error.code in the HTTP range is itself an explicit status —
+    // kept after the rate-limit heuristic so a {code:502, "limit reached"}
+    // frame still classifies as 429 rather than a misleading 502.
+    (typeof error.code === "number" &&
+    Number.isInteger(error.code) &&
+    error.code >= 400 &&
+    error.code <= 599
+      ? error.code
+      : null) ??
+    502;
 
   return {
     status,
