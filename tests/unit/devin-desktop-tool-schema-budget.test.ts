@@ -117,9 +117,11 @@ test("degraded tools keep a skeleton with required + property names, never a pro
       assert.equal(schema.properties.param_0.type, "string");
     } else if (schema.type === "object") {
       // Any tool that shipped a schema must never ship a bare property-less
-      // object schema — that is the name-only-call trigger.
+      // object schema — that is the name-only-call trigger. An empty
+      // properties:{} without required counts as property-less.
       assert.ok(
-        schema.properties || schema.required,
+        Object.keys(schema.properties ?? {}).length > 0 ||
+          (Array.isArray(schema.required) && schema.required.length > 0),
         `${t.name} shipped a property-less schema: ${t.jsonSchemaString}`
       );
     }

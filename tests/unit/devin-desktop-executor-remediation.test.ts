@@ -800,3 +800,182 @@ test("Devin Desktop delivers the retried stream unchanged when the first attempt
     await mock.close();
   }
 });
+
+test("Devin Desktop does not retry when the tool call carries valid arguments", async () => {
+  // The silent-retry machinery must leave healthy streams alone: one upstream
+  // call, args delivered, no second fetch.
+  let chatCalls = 0;
+  const mock = await listen((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      if (request.url === "/exa.auth_pb.AuthService/GetUserJwt") {
+        response.writeHead(200, { "Content-Type": "application/proto" });
+        response.end(stringField(1, "jwt-value"));
+        return;
+      }
+      chatCalls += 1;
+      const toolCall = concat(
+        stringField(1, "call-1"),
+        stringField(2, "Agent"),
+        stringField(3, '{"description":"x","prompt":"go"}')
+      );
+      const responseMessage = concat(bytesField(6, toolCall), varintField(5, 3));
+      response.writeHead(200, { "Content-Type": "application/connect+proto" });
+      response.write(connectEnvelope(responseMessage));
+      response.end(connectEnvelope(new TextEncoder().encode("{}"), 0x02));
+    });
+  });
+
+  try {
+    const result = await new DevinDesktopExecutor().execute({
+      model: "swe-2-max",
+      body: {
+        messages: [{ role: "user", content: "spawn an agent" }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "Agent",
+              description: "Launch an agent",
+              parameters: {
+                type: "object",
+                required: ["description", "prompt"],
+                properties: {
+                  description: { type: "string" },
+                  prompt: { type: "string" },
+                },
+              },
+            },
+          },
+        ],
+      },
+      stream: true,
+      credentials: {
+        accessToken: "test-imported-key",
+        providerSpecificData: { baseUrl: mock.origin },
+      },
+    });
+    const sse = await result.response.text();
+
+    assert.equal(chatCalls, 1, "a well-formed tool call must not trigger the retry");
+    assert.match(sse, /"name":"Agent","arguments":"/);
+    assert.match(sse, /"finish_reason":"tool_calls"/);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("Devin Desktop does not retry an argument-less call for a tool with no required params", async () => {
+  // A parameter-less tool legitimately emits no argument deltas — the retry
+  // predicate consults the tool's required list and must leave it alone.
+  let chatCalls = 0;
+  const mock = await listen((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      if (request.url === "/exa.auth_pb.AuthService/GetUserJwt") {
+        response.writeHead(200, { "Content-Type": "application/proto" });
+        response.end(stringField(1, "jwt-value"));
+        return;
+      }
+      chatCalls += 1;
+      const toolCall = concat(stringField(1, "call-1"), stringField(2, "ListAgents"));
+      const responseMessage = concat(bytesField(6, toolCall), varintField(5, 3));
+      response.writeHead(200, { "Content-Type": "application/connect+proto" });
+      response.write(connectEnvelope(responseMessage));
+      response.end(connectEnvelope(new TextEncoder().encode("{}"), 0x02));
+    });
+  });
+
+  try {
+    const result = await new DevinDesktopExecutor().execute({
+      model: "swe-2-max",
+      body: {
+        messages: [{ role: "user", content: "list agents" }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "ListAgents",
+              description: "List agents",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      },
+      stream: true,
+      credentials: {
+        accessToken: "test-imported-key",
+        providerSpecificData: { baseUrl: mock.origin },
+      },
+    });
+    const sse = await result.response.text();
+
+    assert.equal(chatCalls, 1, "parameter-less tool call must not be retried");
+    assert.match(sse, /"finish_reason":"tool_calls"/);
+    assert.match(sse, /data: \[DONE\]/);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("Devin Desktop surfaces the retry's real upstream status when refetch fails", async () => {
+  // Attempt 1 is defective; the retry fetch returns 429 — the client must see
+  // the actionable status, not a generic 502.
+  let chatCalls = 0;
+  const mock = await listen((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      if (request.url === "/exa.auth_pb.AuthService/GetUserJwt") {
+        response.writeHead(200, { "Content-Type": "application/proto" });
+        response.end(stringField(1, "jwt-value"));
+        return;
+      }
+      chatCalls += 1;
+      if (chatCalls === 2) {
+        response.writeHead(429, { "Content-Type": "text/plain" });
+        response.end("rate limited");
+        return;
+      }
+      const toolCall = concat(stringField(1, "call-1"), stringField(2, "Agent"));
+      const responseMessage = concat(bytesField(6, toolCall), varintField(5, 3));
+      response.writeHead(200, { "Content-Type": "application/connect+proto" });
+      response.write(connectEnvelope(responseMessage));
+      response.end(connectEnvelope(new TextEncoder().encode("{}"), 0x02));
+    });
+  });
+
+  try {
+    const result = await new DevinDesktopExecutor().execute({
+      model: "swe-2-max",
+      body: {
+        messages: [{ role: "user", content: "spawn an agent" }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "Agent",
+              description: "Launch an agent",
+              parameters: {
+                type: "object",
+                required: ["prompt"],
+                properties: { prompt: { type: "string" } },
+              },
+            },
+          },
+        ],
+      },
+      stream: true,
+      credentials: {
+        accessToken: "test-imported-key",
+        providerSpecificData: { baseUrl: mock.origin },
+      },
+    });
+    const sse = await result.response.text();
+
+    assert.equal(chatCalls, 2);
+    assert.match(sse, /retry failed \(HTTP 429\)/);
+    assert.match(sse, /data: \[DONE\]/);
+  } finally {
+    await mock.close();
+  }
+});

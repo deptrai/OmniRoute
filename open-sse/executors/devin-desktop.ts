@@ -495,20 +495,62 @@ function skeletonJsonSchema(node: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = { type: "object" };
   if (node === null || typeof node !== "object" || Array.isArray(node)) return out;
   const obj = node as Record<string, unknown>;
-  if (typeof obj.type === "string") out.type = obj.type;
-  const props = obj.properties;
-  if (props && typeof props === "object" && !Array.isArray(props)) {
-    const outProps: Record<string, unknown> = {};
-    for (const [pk, pv] of Object.entries(props as Record<string, unknown>)) {
-      const pt =
-        pv && typeof pv === "object" && !Array.isArray(pv)
-          ? (pv as Record<string, unknown>).type
-          : undefined;
-      outProps[pk] = { type: typeof pt === "string" ? pt : "string" };
-    }
-    out.properties = outProps;
+  const rootType = typeof obj.type === "string" ? obj.type : "object";
+  if (rootType !== "object") {
+    // A non-object root cannot carry properties — emit the bare type rather
+    // than an invalid {"type":"array","properties":{…}} hybrid.
+    return { type: rootType };
   }
-  if (Array.isArray(obj.required)) out.required = obj.required;
+  const required = Array.isArray(obj.required)
+    ? obj.required.filter((r): r is string => typeof r === "string")
+    : [];
+  const props = obj.properties;
+  const outProps: Record<string, unknown> = {};
+  if (props && typeof props === "object" && !Array.isArray(props)) {
+    for (const [pk, pv] of Object.entries(props as Record<string, unknown>)) {
+      outProps[pk] = skeletonJsonProperty(pv);
+    }
+  } else {
+    // Combinator roots (anyOf/$ref) and schema-less params carry no properties
+    // — synthesize entries from required so the model still sees the contract.
+    for (const r of required) outProps[r] = { type: "string" };
+  }
+  out.properties = outProps;
+  if (required.length) out.required = required;
+  if (required.length && JSON.stringify(out).length > DEVIN_MAX_TOOL_SCHEMA_LEN) {
+    // A very wide schema can exceed the per-tool cap even skeletonized —
+    // reduce to required params only, the minimum needed for valid args.
+    const minProps: Record<string, unknown> = {};
+    const minReq: string[] = [];
+    for (const r of required) {
+      const candidate = {
+        type: "object",
+        properties: { ...minProps, [r]: outProps[r] ?? { type: "string" } },
+        required: [...minReq, r],
+      };
+      if (JSON.stringify(candidate).length > DEVIN_MAX_TOOL_SCHEMA_LEN) break;
+      minProps[r] = outProps[r] ?? { type: "string" };
+      minReq.push(r);
+    }
+    return minReq.length
+      ? { type: "object", properties: minProps, required: minReq }
+      : { type: "object" };
+  }
+  return out;
+}
+
+function skeletonJsonProperty(pv: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (pv && typeof pv === "object" && !Array.isArray(pv)) {
+    const p = pv as Record<string, unknown>;
+    if (typeof p.type === "string") out.type = p.type;
+    else if (Array.isArray(p.type) && p.type.every((x) => typeof x === "string")) {
+      out.type = p.type;
+    } else out.type = "string";
+    if (Array.isArray(p.enum)) out.enum = p.enum.slice(0, 20);
+  } else {
+    out.type = "string";
+  }
   return out;
 }
 
@@ -616,7 +658,9 @@ export function convertTools(tools: unknown): DevinDesktopToolInput[] {
 
     const entrySize = desc.length + schemaStr.length + name.length;
     if (totalSize + entrySize > DEVIN_TOOLS_SIZE_BUDGET) {
-      break;
+      // Skip just this tool — a wide skeleton must not starve smaller tools
+      // that would still fit the remaining budget.
+      continue;
     }
     totalSize += entrySize;
 
@@ -1099,27 +1143,45 @@ export class DevinDesktopExecutor extends BaseExecutor {
       };
     }
 
+    // Tools whose schema declares required parameters — an argument-less call
+    // to one of these is defective; a parameter-less tool legitimately sends
+    // no arguments and must not trigger the silent retry.
+    const toolsRequiringArgs = new Set<string>();
+    if (Array.isArray(requestBody.tools)) {
+      for (const t of requestBody.tools) {
+        const fn = (t as { function?: { name?: unknown; parameters?: unknown } })?.function;
+        const req = (fn?.parameters as { required?: unknown } | undefined)?.required;
+        if (typeof fn?.name === "string" && Array.isArray(req) && req.length) {
+          toolsRequiringArgs.add(fn.name);
+        }
+      }
+    }
+
     // Single silent retry when the upstream stream ends with a tool call that
     // never carried argument deltas — Devin occasionally emits id+name-only
     // calls, and a fresh request usually returns the arguments.
-    const refetch = async (): Promise<Response | null> => {
+    const refetch = async (): Promise<{ upstream?: Response; status?: number }> => {
+      if (signal?.aborted) return {};
       log?.warn?.(
         "DEVIN",
         `Devin Desktop ${model} produced a tool call with missing arguments — retrying upstream once`
       );
       try {
         const retry = await doFetch();
-        if (retry.ok && retry.body) return retry;
+        if (retry.ok && retry.body) return { upstream: retry };
+        const status = retry.status;
         void retry.body?.cancel().catch(() => {});
+        return { status };
       } catch {
-        // Fall through — the original (defective) response is delivered and the
-        // downstream missing-arguments guard produces the client error.
+        // Fetch-level failure (abort, network, response-start timeout) — the
+        // caller emits a generic upstream error; the defective original
+        // stream is never surfaced to the client.
       }
-      return null;
+      return {};
     };
 
     return {
-      response: this.transformToSSE(upstream, model, refetch),
+      response: this.transformToSSE(upstream, model, refetch, toolsRequiringArgs),
       url,
       headers,
       transformedBody: protobuf,
@@ -1129,7 +1191,8 @@ export class DevinDesktopExecutor extends BaseExecutor {
   private transformToSSE(
     upstream: Response,
     model: string,
-    refetch?: () => Promise<Response | null>
+    refetch?: () => Promise<{ upstream?: Response; status?: number }>,
+    toolsRequiringArgs?: Set<string>
   ): Response {
     const responseId = `chatcmpl-devin-desktop-${Date.now()}`;
     const created = Math.floor(Date.now() / 1000);
@@ -1140,35 +1203,33 @@ export class DevinDesktopExecutor extends BaseExecutor {
         // Tool-call chunks are held back until the upstream stream completes:
         // Devin occasionally emits an id+name-only call with no argument
         // deltas, which is only detectable at end-of-stream. Holding the
-        // tool-call tail lets us silently retry the upstream request and
+        // tool-call chunks lets us silently retry the upstream request and
         // deliver a valid response instead of a guaranteed-broken tool_use.
-        let holding = false;
+        // Text/thinking stream through immediately — they are not part of the
+        // defect signature and buffering them would only add latency.
         const held: Uint8Array[] = [];
         let sentRole = false;
         let sentContent = false;
         let suppressContent = false;
         let retried = false;
 
-        const send = (bytes: Uint8Array) => {
-          if (holding) held.push(bytes);
-          else controller.enqueue(bytes);
-        };
         const flushHeld = () => {
           for (const bytes of held) controller.enqueue(bytes);
           held.length = 0;
-          holding = false;
         };
         const emit = (payload: unknown) => {
-          send(TEXT_ENCODER.encode(`data: ${JSON.stringify(payload)}\n\n`));
+          controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(payload)}\n\n`));
         };
         const emitChunk = (delta: Record<string, unknown>, reason: string | null = null) => {
-          emit({
+          const payload = {
             id: responseId,
             object: "chat.completion.chunk",
             created,
             model,
             choices: [{ index: 0, delta, finish_reason: reason }],
-          });
+          };
+          if (delta.tool_calls) held.push(TEXT_ENCODER.encode(`data: ${JSON.stringify(payload)}\n\n`));
+          else emit(payload);
         };
         const emitError = (
           message: string,
@@ -1192,6 +1253,7 @@ export class DevinDesktopExecutor extends BaseExecutor {
         let stopReason = 0;
         const toolCallIndexes = new Map<string, number>();
         const toolArgsByIndex = new Map<number, string>();
+        const toolNamesByIndex = new Map<number, string>();
         let lastToolCallIndex: number | null = null;
         let usage: DevinUsage | null = null;
         let trailerError: ConnectTrailerError | null = null;
@@ -1203,6 +1265,7 @@ export class DevinDesktopExecutor extends BaseExecutor {
           stopReason = 0;
           toolCallIndexes.clear();
           toolArgsByIndex.clear();
+          toolNamesByIndex.clear();
           lastToolCallIndex = null;
           usage = null;
           trailerError = null;
@@ -1236,11 +1299,11 @@ export class DevinDesktopExecutor extends BaseExecutor {
             sentRole = true;
           }
           if (response.thinking && !suppressContent) {
-            if (!holding) sentContent = true;
+            sentContent = true;
             emitChunk({ reasoning_content: response.thinking });
           }
           if (response.text && !suppressContent) {
-            if (!holding) sentContent = true;
+            sentContent = true;
             emitChunk({ content: response.text });
           }
           for (const toolCall of response.toolCalls) {
@@ -1259,6 +1322,7 @@ export class DevinDesktopExecutor extends BaseExecutor {
             if (index < 0) continue;
             const firstDelta = existingIndex === undefined;
             if (toolCall.id) toolCallIndexes.set(toolCall.id, index);
+            if (toolCall.name) toolNamesByIndex.set(index, toolCall.name);
             lastToolCallIndex = index;
             if (toolCall.arguments) {
               toolArgsByIndex.set(index, (toolArgsByIndex.get(index) ?? "") + toolCall.arguments);
@@ -1266,7 +1330,6 @@ export class DevinDesktopExecutor extends BaseExecutor {
             const functionDelta: Record<string, string> = {};
             if (toolCall.name) functionDelta.name = toolCall.name;
             if (toolCall.arguments) functionDelta.arguments = toolCall.arguments;
-            holding = true;
             emitChunk({
               tool_calls: [
                 {
@@ -1388,12 +1451,20 @@ export class DevinDesktopExecutor extends BaseExecutor {
         const hasMissingToolArgs = (): boolean => {
           for (const index of toolCallIndexes.values()) {
             const args = toolArgsByIndex.get(index);
-            if (!args) return true;
-            try {
-              JSON.parse(args);
-            } catch {
-              return true;
+            if (args) {
+              try {
+                JSON.parse(args);
+              } catch {
+                return true;
+              }
+              continue;
             }
+            // No argument deltas at all. A genuinely parameter-less tool
+            // legitimately sends none — only flag the call as defective when
+            // the tool declares required params, its name never arrived, or
+            // the tool set is unknown (conservative default).
+            const name = toolNamesByIndex.get(index);
+            if (!name || !toolsRequiringArgs || toolsRequiringArgs.has(name)) return true;
           }
           return false;
         };
@@ -1406,18 +1477,29 @@ export class DevinDesktopExecutor extends BaseExecutor {
             retried = true;
             held.length = 0;
             suppressContent = sentContent;
-            const retryUpstream = await refetch();
-            if (retryUpstream) {
+            const retry = await refetch();
+            if (retry.upstream) {
               resetAttempt();
-              await runAttempt(retryUpstream);
+              await runAttempt(retry.upstream);
               if (emitTrailerError()) return;
+              if (toolCallIndexes.size === 0 && sentContent) {
+                // The retry answered without tool calls while attempt 1's
+                // narration was already delivered — finishing "stop" here
+                // would silently drop the intended action.
+                emitError("Devin Desktop retry produced no tool call", 502);
+                return;
+              }
               // If the retry is also defective, its held chunks flush below and
               // the downstream missing-arguments guard reports the failure —
               // identical to the pre-retry behavior.
             } else {
-              // Refetch failed before producing a stream — surface a clean
-              // upstream error rather than the defective original response.
-              emitError("Devin Desktop tool call retry failed", 502);
+              // Refetch failed before producing a stream — surface the real
+              // upstream status when we have one rather than a generic 502.
+              const status = retry.status;
+              emitError(
+                `Devin Desktop tool call retry failed${status ? ` (HTTP ${status})` : ""}`,
+                status ?? 502
+              );
               return;
             }
           }
