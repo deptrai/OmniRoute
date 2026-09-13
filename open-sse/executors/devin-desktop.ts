@@ -481,6 +481,37 @@ function sanitizeJsonSchema(node: unknown): unknown {
   return out;
 }
 
+/**
+ * Minimal schema that preserves the contract the model needs to emit a
+ * well-formed call: property names, property types, and the required list.
+ * Used whenever the full schema cannot be afforded — a gutted
+ * {"type":"object"}/{} schema tells the model the tool takes no parameters,
+ * and it then emits id+name-only tool calls (observed in production as
+ * 18-token swe-2-max responses which the client renders as
+ * "[Tool use interrupted]"). A skeleton is ~100-300 bytes vs 2.5KB, so it
+ * still fits a nearly-exhausted tools budget.
+ */
+function skeletonJsonSchema(node: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = { type: "object" };
+  if (node === null || typeof node !== "object" || Array.isArray(node)) return out;
+  const obj = node as Record<string, unknown>;
+  if (typeof obj.type === "string") out.type = obj.type;
+  const props = obj.properties;
+  if (props && typeof props === "object" && !Array.isArray(props)) {
+    const outProps: Record<string, unknown> = {};
+    for (const [pk, pv] of Object.entries(props as Record<string, unknown>)) {
+      const pt =
+        pv && typeof pv === "object" && !Array.isArray(pv)
+          ? (pv as Record<string, unknown>).type
+          : undefined;
+      outProps[pk] = { type: typeof pt === "string" ? pt : "string" };
+    }
+    out.properties = outProps;
+  }
+  if (Array.isArray(obj.required)) out.required = obj.required;
+  return out;
+}
+
 const DEVIN_CRITICAL_BUILTINS = new Set([
   "Write",
   "Edit",
@@ -561,20 +592,26 @@ export function convertTools(tools: unknown): DevinDesktopToolInput[] {
         schemaStr = "{}";
       }
       if (schemaStr.length > DEVIN_MAX_TOOL_SCHEMA_LEN) {
-        schemaStr = '{"type":"object"}';
+        // Never degrade to a property-less schema — that produces id+name-only
+        // tool calls upstream. A skeleton keeps required + property names.
+        schemaStr = JSON.stringify(skeletonJsonSchema(t.function.parameters));
       }
     } else if (remaining > DEVIN_TIER3_THRESHOLD) {
       desc =
         rawDesc.length > DEVIN_TIER2_DESC_LEN
           ? rawDesc.slice(0, DEVIN_TIER2_DESC_LEN) + "…"
           : rawDesc;
-      schemaStr = '{"type":"object"}';
+      schemaStr = t.function.parameters
+        ? JSON.stringify(skeletonJsonSchema(t.function.parameters))
+        : "{}";
     } else {
       desc =
         rawDesc.length > DEVIN_TIER3_DESC_LEN
           ? rawDesc.slice(0, DEVIN_TIER3_DESC_LEN) + "…"
           : rawDesc;
-      schemaStr = "{}";
+      schemaStr = t.function.parameters
+        ? JSON.stringify(skeletonJsonSchema(t.function.parameters))
+        : "{}";
     }
 
     const entrySize = desc.length + schemaStr.length + name.length;
@@ -1022,15 +1059,18 @@ export class DevinDesktopExecutor extends BaseExecutor {
       `Devin Desktop → ${model} (${converted.prompts.length} messages, max_tokens=${protoPayload.maxTokens ?? DEVIN_DESKTOP_DEFAULT_MAX_TOKENS})`
     );
 
-    let upstream: Response;
-    try {
-      upstream = await fetch(url, {
+    const doFetch = () =>
+      fetch(url, {
         method: "POST",
         headers,
         body: bodyArrayBuffer(framed),
         signal: signal ?? undefined,
         omniResponseStartTimeoutMs: resolveDevinResponseStartTimeoutMs(),
       } as RequestInit & { omniResponseStartTimeoutMs?: number });
+
+    let upstream: Response;
+    try {
+      upstream = await doFetch();
     } catch (error) {
       const aborted = signal?.aborted === true;
       const safe = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
@@ -1059,23 +1099,67 @@ export class DevinDesktopExecutor extends BaseExecutor {
       };
     }
 
+    // Single silent retry when the upstream stream ends with a tool call that
+    // never carried argument deltas — Devin occasionally emits id+name-only
+    // calls, and a fresh request usually returns the arguments.
+    const refetch = async (): Promise<Response | null> => {
+      log?.warn?.(
+        "DEVIN",
+        `Devin Desktop ${model} produced a tool call with missing arguments — retrying upstream once`
+      );
+      try {
+        const retry = await doFetch();
+        if (retry.ok && retry.body) return retry;
+        void retry.body?.cancel().catch(() => {});
+      } catch {
+        // Fall through — the original (defective) response is delivered and the
+        // downstream missing-arguments guard produces the client error.
+      }
+      return null;
+    };
+
     return {
-      response: this.transformToSSE(upstream, model),
+      response: this.transformToSSE(upstream, model, refetch),
       url,
       headers,
       transformedBody: protobuf,
     };
   }
 
-  private transformToSSE(upstream: Response, model: string): Response {
+  private transformToSSE(
+    upstream: Response,
+    model: string,
+    refetch?: () => Promise<Response | null>
+  ): Response {
     const responseId = `chatcmpl-devin-desktop-${Date.now()}`;
     const created = Math.floor(Date.now() / 1000);
     let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        // Tool-call chunks are held back until the upstream stream completes:
+        // Devin occasionally emits an id+name-only call with no argument
+        // deltas, which is only detectable at end-of-stream. Holding the
+        // tool-call tail lets us silently retry the upstream request and
+        // deliver a valid response instead of a guaranteed-broken tool_use.
+        let holding = false;
+        const held: Uint8Array[] = [];
+        let sentRole = false;
+        let sentContent = false;
+        let suppressContent = false;
+        let retried = false;
+
+        const send = (bytes: Uint8Array) => {
+          if (holding) held.push(bytes);
+          else controller.enqueue(bytes);
+        };
+        const flushHeld = () => {
+          for (const bytes of held) controller.enqueue(bytes);
+          held.length = 0;
+          holding = false;
+        };
         const emit = (payload: unknown) => {
-          controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(payload)}\n\n`));
+          send(TEXT_ENCODER.encode(`data: ${JSON.stringify(payload)}\n\n`));
         };
         const emitChunk = (delta: Record<string, unknown>, reason: string | null = null) => {
           emit({
@@ -1092,11 +1176,13 @@ export class DevinDesktopExecutor extends BaseExecutor {
           code = "upstream_error",
           type = "devin_desktop_error"
         ) => {
-          emit(
-            buildErrorBody(status, message, undefined, {
-              type,
-              code,
-            })
+          // Errors bypass the hold buffer — held chunks belong to a response
+          // that is being abandoned.
+          held.length = 0;
+          controller.enqueue(
+            TEXT_ENCODER.encode(
+              `data: ${JSON.stringify(buildErrorBody(status, message, undefined, { type, code }))}\n\n`
+            )
           );
           controller.enqueue(TEXT_ENCODER.encode("data: [DONE]\n\n"));
         };
@@ -1105,125 +1191,159 @@ export class DevinDesktopExecutor extends BaseExecutor {
         let roleEmitted = false;
         let stopReason = 0;
         const toolCallIndexes = new Map<string, number>();
+        const toolArgsByIndex = new Map<number, string>();
         let lastToolCallIndex: number | null = null;
         let usage: DevinUsage | null = null;
         let trailerError: ConnectTrailerError | null = null;
         let sawEndStream = false;
 
-        try {
-          activeReader = upstream.body?.getReader() ?? null;
-          if (!activeReader) throw new Error("Devin Desktop response body is empty");
+        const resetAttempt = () => {
+          pending = new Uint8Array(0);
+          roleEmitted = false;
+          stopReason = 0;
+          toolCallIndexes.clear();
+          toolArgsByIndex.clear();
+          lastToolCallIndex = null;
+          usage = null;
+          trailerError = null;
+          sawEndStream = false;
+        };
 
-          const handleFrame = (flags: number, payload: Uint8Array): boolean => {
-            if ((flags & ~(CONNECT_COMPRESSED_FLAG | CONNECT_END_STREAM_FLAG)) !== 0) {
-              throw new Error("Invalid Devin Desktop Connect frame flags");
+        const handleFrame = (flags: number, payload: Uint8Array): boolean => {
+          if ((flags & ~(CONNECT_COMPRESSED_FLAG | CONNECT_END_STREAM_FLAG)) !== 0) {
+            throw new Error("Invalid Devin Desktop Connect frame flags");
+          }
+          const decodedPayload =
+            flags & CONNECT_COMPRESSED_FLAG
+              ? gunzipSync(payload, { maxOutputLength: MAX_CONNECT_FRAME_BYTES })
+              : payload;
+          if (flags & CONNECT_END_STREAM_FLAG) {
+            if (sawEndStream) throw new Error("Duplicate Devin Desktop Connect end-stream frame");
+            sawEndStream = true;
+            trailerError = parseConnectTrailerError(decodedPayload);
+            return true;
+          }
+          const response = decodeGetChatMessageResponse(decodedPayload);
+          stopReason = response.stopReason || stopReason;
+          usage = response.usage ?? usage;
+          if (
+            (response.thinking || response.text || response.toolCalls.length) &&
+            !roleEmitted &&
+            !sentRole
+          ) {
+            emitChunk({ role: "assistant", content: "" });
+            roleEmitted = true;
+            sentRole = true;
+          }
+          if (response.thinking && !suppressContent) {
+            if (!holding) sentContent = true;
+            emitChunk({ reasoning_content: response.thinking });
+          }
+          if (response.text && !suppressContent) {
+            if (!holding) sentContent = true;
+            emitChunk({ content: response.text });
+          }
+          for (const toolCall of response.toolCalls) {
+            // Argument-only deltas arrive as separate proto messages with no
+            // id/name — they continue the most recently started tool call.
+            // Known limitation: the wire format carries no per-call index on
+            // argument deltas, so if upstream ever interleaves argument
+            // deltas from two parallel tool calls there is no way to
+            // attribute them correctly. Observed Devin Desktop streams emit
+            // each call's deltas contiguously (id+name first, then argument
+            // fragments), so the most-recent-call heuristic is correct.
+            const existingIndex = toolCall.id
+              ? toolCallIndexes.get(toolCall.id)
+              : (lastToolCallIndex ?? undefined);
+            const index = existingIndex ?? (toolCall.id ? toolCallIndexes.size : -1);
+            if (index < 0) continue;
+            const firstDelta = existingIndex === undefined;
+            if (toolCall.id) toolCallIndexes.set(toolCall.id, index);
+            lastToolCallIndex = index;
+            if (toolCall.arguments) {
+              toolArgsByIndex.set(index, (toolArgsByIndex.get(index) ?? "") + toolCall.arguments);
             }
-            const decodedPayload =
-              flags & CONNECT_COMPRESSED_FLAG
-                ? gunzipSync(payload, { maxOutputLength: MAX_CONNECT_FRAME_BYTES })
-                : payload;
-            if (flags & CONNECT_END_STREAM_FLAG) {
-              if (sawEndStream) throw new Error("Duplicate Devin Desktop Connect end-stream frame");
-              sawEndStream = true;
-              trailerError = parseConnectTrailerError(decodedPayload);
+            const functionDelta: Record<string, string> = {};
+            if (toolCall.name) functionDelta.name = toolCall.name;
+            if (toolCall.arguments) functionDelta.arguments = toolCall.arguments;
+            holding = true;
+            emitChunk({
+              tool_calls: [
+                {
+                  index,
+                  ...(firstDelta ? { id: toolCall.id, type: "function" } : {}),
+                  function: functionDelta,
+                },
+              ],
+            });
+          }
+          return false;
+        };
+
+        const drain = (): boolean => {
+          let offset = 0;
+          while (pending.length - offset >= 5) {
+            const length = new DataView(
+              pending.buffer,
+              pending.byteOffset + offset + 1,
+              4
+            ).getUint32(0, false);
+            if (length > MAX_CONNECT_FRAME_BYTES) {
+              throw new Error("Devin Desktop Connect frame exceeds the safety limit");
+            }
+            if (pending.length - offset < 5 + length) break;
+            const flags = pending[offset];
+            const terminal = handleFrame(flags, pending.slice(offset + 5, offset + 5 + length));
+            offset += 5 + length;
+            if (terminal) {
+              if (pending.length !== offset) {
+                throw new Error("Data follows the Devin Desktop Connect end-stream frame");
+              }
+              pending = new Uint8Array(0);
               return true;
             }
-            const response = decodeGetChatMessageResponse(decodedPayload);
-            stopReason = response.stopReason || stopReason;
-            usage = response.usage ?? usage;
-            if ((response.thinking || response.text || response.toolCalls.length) && !roleEmitted) {
-              emitChunk({ role: "assistant", content: "" });
-              roleEmitted = true;
-            }
-            if (response.thinking) emitChunk({ reasoning_content: response.thinking });
-            if (response.text) emitChunk({ content: response.text });
-            for (const toolCall of response.toolCalls) {
-              // Argument-only deltas arrive as separate proto messages with no
-              // id/name — they continue the most recently started tool call.
-              // Known limitation: the wire format carries no per-call index on
-              // argument deltas, so if upstream ever interleaves argument
-              // deltas from two parallel tool calls there is no way to
-              // attribute them correctly. Observed Devin Desktop streams emit
-              // each call's deltas contiguously (id+name first, then argument
-              // fragments), so the most-recent-call heuristic is correct.
-              const existingIndex = toolCall.id
-                ? toolCallIndexes.get(toolCall.id)
-                : (lastToolCallIndex ?? undefined);
-              const index = existingIndex ?? (toolCall.id ? toolCallIndexes.size : -1);
-              if (index < 0) continue;
-              const firstDelta = existingIndex === undefined;
-              if (toolCall.id) toolCallIndexes.set(toolCall.id, index);
-              lastToolCallIndex = index;
-              const functionDelta: Record<string, string> = {};
-              if (toolCall.name) functionDelta.name = toolCall.name;
-              if (toolCall.arguments) functionDelta.arguments = toolCall.arguments;
-              emitChunk({
-                tool_calls: [
-                  {
-                    index,
-                    ...(firstDelta ? { id: toolCall.id, type: "function" } : {}),
-                    function: functionDelta,
-                  },
-                ],
-              });
-            }
-            return false;
-          };
+          }
+          if (offset > 0) pending = pending.slice(offset);
+          return false;
+        };
 
-          const drain = (): boolean => {
-            let offset = 0;
-            while (pending.length - offset >= 5) {
-              const length = new DataView(
-                pending.buffer,
-                pending.byteOffset + offset + 1,
-                4
-              ).getUint32(0, false);
-              if (length > MAX_CONNECT_FRAME_BYTES) {
-                throw new Error("Devin Desktop Connect frame exceeds the safety limit");
-              }
-              if (pending.length - offset < 5 + length) break;
-              const flags = pending[offset];
-              const terminal = handleFrame(flags, pending.slice(offset + 5, offset + 5 + length));
-              offset += 5 + length;
-              if (terminal) {
-                if (pending.length !== offset) {
-                  throw new Error("Data follows the Devin Desktop Connect end-stream frame");
+        const runAttempt = async (resp: Response): Promise<void> => {
+          activeReader = resp.body?.getReader() ?? null;
+          if (!activeReader) throw new Error("Devin Desktop response body is empty");
+          try {
+            while (true) {
+              const { done, value } = await activeReader.read();
+              if (value?.length) {
+                pending = pending.length ? concatBytes([pending, value]) : Uint8Array.from(value);
+                if (drain()) {
+                  await activeReader.cancel("Devin Desktop Connect end-stream received");
+                  break;
                 }
-                pending = new Uint8Array(0);
-                return true;
               }
+              if (done) break;
             }
-            if (offset > 0) pending = pending.slice(offset);
-            return false;
-          };
-
-          while (true) {
-            const { done, value } = await activeReader.read();
-            if (value?.length) {
-              pending = pending.length ? concatBytes([pending, value]) : Uint8Array.from(value);
-              if (drain()) {
-                await activeReader.cancel("Devin Desktop Connect end-stream received");
-                break;
-              }
+            if (!sawEndStream) drain();
+            if (pending.length !== 0) throw new Error("Truncated Devin Desktop Connect frame");
+            if (!sawEndStream) {
+              throw new Error("Devin Desktop Connect stream ended without trailers");
             }
-            if (done) break;
+          } catch (error) {
+            // Cancel the upstream reader before the lock is released — the outer
+            // catch can no longer reach it once `activeReader` is cleared, and
+            // an uncancelled reader leaves the upstream socket open.
+            try {
+              await activeReader?.cancel("Devin Desktop Connect stream failed");
+            } catch {
+              // Preserve the original decode error.
+            }
+            throw error;
+          } finally {
+            activeReader?.releaseLock();
+            activeReader = null;
           }
-          if (!sawEndStream) drain();
-          if (pending.length !== 0) throw new Error("Truncated Devin Desktop Connect frame");
-          if (!sawEndStream) throw new Error("Devin Desktop Connect stream ended without trailers");
-          if (trailerError) {
-            const rawMessage = `${trailerError.code}: ${trailerError.message}`;
-            const classified = classifyDevinDesktopError(rawMessage);
-            const detail = sanitizeErrorMessage(rawMessage);
-            emitError(
-              `Devin Desktop stream error: ${detail}`,
-              classified.status,
-              classified.code,
-              classified.type
-            );
-            return;
-          }
+        };
 
+        const emitFinal = () => {
           const finalPayload: Record<string, unknown> = {
             id: responseId,
             object: "chat.completion.chunk",
@@ -1246,8 +1366,63 @@ export class DevinDesktopExecutor extends BaseExecutor {
               cache_write_tokens: usage.cacheWriteTokens,
             };
           }
+          flushHeld();
           emit(finalPayload);
           controller.enqueue(TEXT_ENCODER.encode("data: [DONE]\n\n"));
+        };
+
+        const emitTrailerError = () => {
+          if (!trailerError) return false;
+          const rawMessage = `${trailerError.code}: ${trailerError.message}`;
+          const classified = classifyDevinDesktopError(rawMessage);
+          const detail = sanitizeErrorMessage(rawMessage);
+          emitError(
+            `Devin Desktop stream error: ${detail}`,
+            classified.status,
+            classified.code,
+            classified.type
+          );
+          return true;
+        };
+
+        const hasMissingToolArgs = (): boolean => {
+          for (const index of toolCallIndexes.values()) {
+            const args = toolArgsByIndex.get(index);
+            if (!args) return true;
+            try {
+              JSON.parse(args);
+            } catch {
+              return true;
+            }
+          }
+          return false;
+        };
+
+        try {
+          await runAttempt(upstream);
+          if (emitTrailerError()) return;
+
+          if (hasMissingToolArgs() && !retried && refetch) {
+            retried = true;
+            held.length = 0;
+            suppressContent = sentContent;
+            const retryUpstream = await refetch();
+            if (retryUpstream) {
+              resetAttempt();
+              await runAttempt(retryUpstream);
+              if (emitTrailerError()) return;
+              // If the retry is also defective, its held chunks flush below and
+              // the downstream missing-arguments guard reports the failure —
+              // identical to the pre-retry behavior.
+            } else {
+              // Refetch failed before producing a stream — surface a clean
+              // upstream error rather than the defective original response.
+              emitError("Devin Desktop tool call retry failed", 502);
+              return;
+            }
+          }
+
+          emitFinal();
         } catch (error) {
           try {
             await activeReader?.cancel("Devin Desktop Connect stream failed");

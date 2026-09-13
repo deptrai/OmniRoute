@@ -653,3 +653,150 @@ test("Devin Desktop CompletionConfig forwards max_tokens and clamps temperature=
   assert.equal(new DataView(topPBytes.buffer, topPBytes.byteOffset, 8).getFloat64(0, true), 0.5);
   assert.equal(completion.get(7)?.[0], 20);
 });
+
+test("Devin Desktop silently retries once when upstream emits a tool call with no arguments", async () => {
+  // Regression test for the 2026-09-13 production defect: swe-2-max responses
+  // arrived as an 18-token id+name-only tool call (no argument deltas), which
+  // the client rendered as "[Tool use interrupted]". The executor now holds
+  // tool-call chunks until end-of-stream, detects the missing arguments, and
+  // re-issues the upstream request once before delivering the retried stream.
+  let chatCalls = 0;
+  const mock = await listen((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      if (request.url === "/exa.auth_pb.AuthService/GetUserJwt") {
+        response.writeHead(200, { "Content-Type": "application/proto" });
+        response.end(concat(stringField(1, "jwt-value"), stringField(2, "https://x.invalid")));
+        return;
+      }
+      chatCalls += 1;
+      const toolCall =
+        chatCalls === 1
+          ? // First attempt: id+name only, no argument field at all.
+            concat(stringField(1, "call-1"), stringField(2, "Agent"))
+          : // Retry: same call carrying its arguments.
+            concat(
+              stringField(1, "call-2"),
+              stringField(2, "Agent"),
+              stringField(3, '{"description":"x","prompt":"go"}')
+            );
+      const responseMessage = concat(bytesField(6, toolCall), varintField(5, 3));
+      response.writeHead(200, { "Content-Type": "application/connect+proto" });
+      response.write(connectEnvelope(responseMessage));
+      response.end(connectEnvelope(new TextEncoder().encode("{}"), 0x02));
+    });
+  });
+
+  try {
+    const result = await new DevinDesktopExecutor().execute({
+      model: "swe-2-max",
+      body: {
+        messages: [{ role: "user", content: "spawn an agent" }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "Agent",
+              description: "Launch an agent",
+              parameters: {
+                type: "object",
+                required: ["description", "prompt"],
+                properties: {
+                  description: { type: "string" },
+                  prompt: { type: "string" },
+                },
+              },
+            },
+          },
+        ],
+      },
+      stream: true,
+      credentials: {
+        accessToken: "test-imported-key",
+        providerSpecificData: { baseUrl: mock.origin },
+      },
+    });
+    const sse = await result.response.text();
+
+    assert.equal(chatCalls, 2, "defective tool call must trigger exactly one upstream retry");
+    assert.match(sse, /"name":"Agent","arguments":"\{\\"description\\":\\"x\\",\\"prompt\\":\\"go\\"\}"/);
+    assert.match(sse, /"finish_reason":"tool_calls"/);
+    assert.match(sse, /data: \[DONE\]/);
+    // The defective first attempt must never reach the client.
+    assert.ok(!sse.includes('"call-1"'), "name-only tool call must not leak downstream");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("Devin Desktop delivers the retried stream unchanged when the first attempt was defective", async () => {
+  // Same defect, but attempt 1 carried assistant text before the broken call —
+  // the client must keep that text and receive the retried tool calls.
+  let chatCalls = 0;
+  const mock = await listen((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      if (request.url === "/exa.auth_pb.AuthService/GetUserJwt") {
+        response.writeHead(200, { "Content-Type": "application/proto" });
+        response.end(stringField(1, "jwt-value"));
+        return;
+      }
+      chatCalls += 1;
+      const toolCall =
+        chatCalls === 1
+          ? concat(stringField(1, "call-1"), stringField(2, "Bash"))
+          : concat(
+              stringField(1, "call-2"),
+              stringField(2, "Bash"),
+              stringField(3, '{"command":"ls"}')
+            );
+      const responseMessage = concat(
+        stringField(3, "first attempt text"),
+        bytesField(6, toolCall),
+        varintField(5, 3)
+      );
+      response.writeHead(200, { "Content-Type": "application/connect+proto" });
+      response.write(connectEnvelope(responseMessage));
+      response.end(connectEnvelope(new TextEncoder().encode("{}"), 0x02));
+    });
+  });
+
+  try {
+    const result = await new DevinDesktopExecutor().execute({
+      model: "swe-2-max",
+      body: {
+        messages: [{ role: "user", content: "list files" }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "Bash",
+              description: "Run a command",
+              parameters: {
+                type: "object",
+                required: ["command"],
+                properties: { command: { type: "string" } },
+              },
+            },
+          },
+        ],
+      },
+      stream: true,
+      credentials: {
+        accessToken: "test-imported-key",
+        providerSpecificData: { baseUrl: mock.origin },
+      },
+    });
+    const sse = await result.response.text();
+
+    assert.equal(chatCalls, 2);
+    // Attempt-1 text already streamed to the client; the retry contributes only
+    // its tool call (its own text is suppressed to avoid a doubled answer).
+    assert.equal((sse.match(/first attempt text/g) ?? []).length, 1);
+    assert.match(sse, /"arguments":"\{\\"command\\":\\"ls\\"\}"/);
+    assert.match(sse, /"finish_reason":"tool_calls"/);
+  } finally {
+    await mock.close();
+  }
+});
