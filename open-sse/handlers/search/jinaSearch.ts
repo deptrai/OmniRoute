@@ -40,7 +40,8 @@ export function buildJinaSearchRequest(
 
   const body: Record<string, unknown> = {
     q: params.query,
-    num: params.maxResults,
+    // s.jina.ai enforces 0 <= num <= 20
+    num: Math.min(Math.max(1, params.maxResults), 20),
   };
   if (params.country) body.gl = params.country;
   if (params.language) body.hl = params.language;

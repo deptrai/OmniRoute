@@ -295,7 +295,7 @@ export const SEARCH_PROVIDERS: Record<string, SearchProviderConfig> = {
     freeMonthlyQuota: 1000,
     searchTypes: ["web"],
     defaultMaxResults: 5,
-    maxMaxResults: 50,
+    maxMaxResults: 20,
     timeoutMs: 15_000,
     cacheTTLMs: 5 * 60 * 1000,
   },
