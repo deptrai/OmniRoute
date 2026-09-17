@@ -837,9 +837,12 @@ test("saveCallLog logs and returns when sqlite persistence throws unexpectedly",
     console.error = originalConsoleError;
   }
 
-  assert.equal(consoleCalls.length, 1);
-  assert.match(consoleCalls[0], /Failed to save call log/);
-  assert.match(consoleCalls[0], /simulated sqlite prepare failure/);
+  // With the AD-1 writer queue the failure surfaces twice: the queue logs the
+  // dropped batch AND saveCallLog logs its own failure line. Assert on the
+  // saveCallLog line, not on a single-log count.
+  const saveLogErrors = consoleCalls.filter((line) => /Failed to save call log/.test(line));
+  assert.equal(saveLogErrors.length, 1);
+  assert.match(saveLogErrors[0], /simulated sqlite prepare failure/);
 });
 
 test("getCallLogs and getCallLogById expose combo target identifiers", async () => {

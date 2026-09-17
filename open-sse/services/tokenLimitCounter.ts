@@ -13,6 +13,7 @@
  */
 
 import { getDbInstance } from "../../src/lib/db/core.ts";
+import { enqueueWriteAwaited } from "../../src/lib/usage/writeQueue.ts";
 import {
   resetWindowIfElapsed,
   getWindowUsage,
@@ -271,69 +272,64 @@ export function recordTokenUsage(
       const limits = getTokenLimitsForRequest(apiKeyId, provider || "", model || "");
       if (!limits || limits.length === 0) return;
 
-      const db = getDbInstance();
       const applied: Array<{ limitId: string; windowStart: string; total: number }> = [];
 
-      const tx = db.transaction(() => {
-        for (const limit of limits) {
-          if (limit.enabled === false) continue;
+      // Spine AD-1: the read-modify-write runs inside the shared writer queue's
+      // batch transaction — the queue supplies its own transaction wrapper, so
+      // the op body must NOT open another one. syncCache runs after commit.
+      enqueueWriteAwaited({
+        label: "api_key_token_counters.record",
+        run: (db) => {
+          for (const limit of limits) {
+            if (limit.enabled === false) continue;
 
-          const { windowStart } = resetWindowIfElapsed(limit, now);
+            const { windowStart } = resetWindowIfElapsed(limit, now);
 
-          const currentRow = db
-            .prepare(
-              "SELECT tokens_used FROM api_key_token_counters WHERE limit_id = ? AND window_start = ?"
-            )
-            .get(limit.id, windowStart) as { tokens_used?: number } | undefined;
-
-          // First write to a new window? Detect rollover from the prior window.
-          if (!currentRow) {
-            const priorRow = db
+            const currentRow = db
               .prepare(
-                `SELECT window_start, tokens_used FROM api_key_token_counters
-                 WHERE limit_id = ? AND window_start < ?
-                 ORDER BY window_start DESC LIMIT 1`
+                "SELECT tokens_used FROM api_key_token_counters WHERE limit_id = ? AND window_start = ?"
               )
-              .get(limit.id, windowStart) as
-              { window_start?: string; tokens_used?: number } | undefined;
-            const prevTokens =
-              priorRow && typeof priorRow.tokens_used === "number" ? priorRow.tokens_used : 0;
-            if (prevTokens > 0) {
-              logTokenLimitReset(limit.id, prevTokens, windowStart);
+              .get(limit.id, windowStart) as { tokens_used?: number } | undefined;
+
+            // First write to a new window? Detect rollover from the prior window.
+            if (!currentRow) {
+              const priorRow = db
+                .prepare(
+                  `SELECT window_start, tokens_used FROM api_key_token_counters
+                   WHERE limit_id = ? AND window_start < ?
+                   ORDER BY window_start DESC LIMIT 1`
+                )
+                .get(limit.id, windowStart) as
+                { window_start?: string; tokens_used?: number } | undefined;
+              const prevTokens =
+                priorRow && typeof priorRow.tokens_used === "number" ? priorRow.tokens_used : 0;
+              if (prevTokens > 0) {
+                logTokenLimitReset(limit.id, prevTokens, windowStart);
+              }
+
+              // Cold window with no counter row: seed from usage_history so the
+              // running total reflects prior usage already recorded in this window
+              // before applying the new delta. Runs inside the batch txn, so it
+              // sees this batch's own queued usage_history inserts.
+              const seeded = seedWindowUsageFromHistory(limit, now);
+              if (seeded > 0) {
+                incrementWindowTokens(limit.id, windowStart, seeded);
+              }
             }
 
-            // Cold window with no counter row: seed from usage_history so the
-            // running total reflects prior usage already recorded in this window
-            // before applying the new delta. Synchronous (better-sqlite3) — safe
-            // inside this transaction. Mirrors getCurrentWindowUsage seed-on-miss.
-            const seeded = seedWindowUsageFromHistory(limit, now);
-            if (seeded > 0) {
-              incrementWindowTokens(limit.id, windowStart, seeded);
-            }
+            const total = incrementWindowTokens(limit.id, windowStart, delta);
+            applied.push({ limitId: limit.id, windowStart, total });
           }
-
-          const total = incrementWindowTokens(limit.id, windowStart, delta);
-          applied.push({ limitId: limit.id, windowStart, total });
-        }
-      });
-
-      try {
-        tx();
-        // Update the read accelerator to the new authoritative totals.
-        for (const a of applied) {
-          syncCache(a.limitId, a.windowStart, a.total);
-        }
-      } catch (err) {
-        // better-sqlite3 auto-rolls-back on throw; verify we are not stuck mid-txn.
-        if (db.inTransaction) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // already rolled back
+        },
+        afterCommit: () => {
+          // Update the read accelerator to the new authoritative totals.
+          for (const a of applied) {
+            syncCache(a.limitId, a.windowStart, a.total);
           }
-        }
+        },
+      }).catch(() => {
         // Swallow — usage recording must never surface to the request path.
-      }
+      });
     })
     .catch(() => {
       // Microtask scheduling/setup failure — non-fatal, never blocks the stream.

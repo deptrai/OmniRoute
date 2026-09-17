@@ -633,11 +633,6 @@
       "count": 1
     }
   },
-  "open-sse/services/tokenLimitCounter.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
   "open-sse/services/tokenRefresh.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 2
@@ -1812,11 +1807,6 @@
   },
   "src/lib/usage/apiKeyUsageLimits.ts": {
     "no-restricted-syntax": {
-      "count": 1
-    }
-  },
-  "src/lib/usage/callLogs.ts": {
-    "@typescript-eslint/no-unused-vars": {
       "count": 1
     }
   },

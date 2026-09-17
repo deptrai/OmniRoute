@@ -35,6 +35,7 @@ import {
   type CallLogDetailState,
 } from "./callLogArtifacts";
 import { closeCallLogArtifactWriter, writeCallArtifactAsync } from "./callLogArtifactWriter";
+import { enqueueWriteAwaited, closeWriteQueue } from "./writeQueue";
 import {
   toNumber,
   toStringOrNull,
@@ -72,6 +73,31 @@ type JsonRecord = Record<string, unknown>;
 
 const pendingCallLogSaves = new Set<Promise<void>>();
 let callLogSavesClosing = false;
+
+const CALL_LOG_INSERT_SQL = `
+      INSERT INTO call_logs (
+        id, timestamp, method, path, status, model, requested_model, provider,
+        account, connection_id, duration, tokens_in, tokens_out,
+        tokens_cache_read, tokens_cache_creation, tokens_reasoning, tokens_compressed,
+        reasoning_source, reasoning_chars,
+        cache_source, request_type, source_format, target_format, api_key_id, api_key_name,
+        combo_name, combo_step_id, combo_execution_key, error_summary, detail_state,
+        artifact_relpath, artifact_size_bytes, artifact_sha256,
+        has_request_body, has_response_body, has_pipeline_details, request_summary,
+        correlation_id, model_pinned, session_tag, response_id, error_type
+      )
+      VALUES (
+        @id, @timestamp, @method, @path, @status, @model, @requestedModel, @provider,
+        @account, @connectionId, @duration, @tokensIn, @tokensOut,
+        @tokensCacheRead, @tokensCacheCreation, @tokensReasoning, @tokensCompressed,
+        @reasoningSource, @reasoningChars,
+        @cacheSource, @requestType, @sourceFormat, @targetFormat, @apiKeyId, @apiKeyName,
+        @comboName, @comboStepId, @comboExecutionKey, @errorSummary, @detailState,
+        @artifactRelPath, @artifactSizeBytes, @artifactSha256,
+        @hasRequestBody, @hasResponseBody, @hasPipelineDetails, @requestSummary,
+        @correlationId, @modelPinned, @sessionTag, @responseId, @errorType
+      )
+    `;
 
 type CallLogSummaryRow = {
   id: string;
@@ -123,11 +149,6 @@ type LegacyInlineRow = {
   request_body: string | null;
   response_body: string | null;
   error: string | null;
-};
-
-type DeleteResult = {
-  deletedRows: number;
-  deletedArtifacts: number;
 };
 
 let logIdCounter = 0;
@@ -558,33 +579,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       }
     }
 
-    const db = getDbInstance();
-    db.prepare(
-      `
-      INSERT INTO call_logs (
-        id, timestamp, method, path, status, model, requested_model, provider,
-        account, connection_id, duration, tokens_in, tokens_out,
-        tokens_cache_read, tokens_cache_creation, tokens_reasoning, tokens_compressed,
-        reasoning_source, reasoning_chars,
-        cache_source, request_type, source_format, target_format, api_key_id, api_key_name,
-        combo_name, combo_step_id, combo_execution_key, error_summary, detail_state,
-        artifact_relpath, artifact_size_bytes, artifact_sha256,
-        has_request_body, has_response_body, has_pipeline_details, request_summary,
-        correlation_id, model_pinned, session_tag, response_id, error_type
-      )
-      VALUES (
-        @id, @timestamp, @method, @path, @status, @model, @requestedModel, @provider,
-        @account, @connectionId, @duration, @tokensIn, @tokensOut,
-        @tokensCacheRead, @tokensCacheCreation, @tokensReasoning, @tokensCompressed,
-        @reasoningSource, @reasoningChars,
-        @cacheSource, @requestType, @sourceFormat, @targetFormat, @apiKeyId, @apiKeyName,
-        @comboName, @comboStepId, @comboExecutionKey, @errorSummary, @detailState,
-        @artifactRelPath, @artifactSizeBytes, @artifactSha256,
-        @hasRequestBody, @hasResponseBody, @hasPipelineDetails, @requestSummary,
-        @correlationId, @modelPinned, @sessionTag, @responseId, @errorType
-      )
-    `
-    ).run({
+    const insertParams = {
       ...logEntry,
       errorSummary: toStoredErrorSummary(protectedError),
       detailState,
@@ -595,9 +590,17 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       hasResponseBody: protectedResponseBody !== null ? 1 : 0,
       hasPipelineDetails: protectedPipelinePayloads ? 1 : 0,
       requestSummary,
+    };
+    // Spine AD-1: no synchronous SQLite on the request path — the row is
+    // persisted by the shared writer queue, batched into one transaction.
+    // Awaiting keeps the old contract: saveCallLog resolves after commit.
+    await enqueueWriteAwaited({
+      label: "call_logs.insert",
+      run: (db) => {
+        db.prepare(CALL_LOG_INSERT_SQL).run(insertParams);
+      },
+      afterCommit: scheduleCallLogRotation,
     });
-
-    scheduleCallLogRotation();
   } catch (error) {
     console.error(
       "[callLogs] Failed to save call log:",
@@ -650,6 +653,17 @@ export async function closeCallLogSaves(timeoutMs = 2_000): Promise<void> {
   // continuations can finish before the database is closed.
   await Promise.allSettled([...pendingCallLogSaves]);
   await closeCallLogArtifactWriter(0);
+  // Operations resolve on COMMIT, so awaited callers are already durable — but
+  // fire-and-forget sinks (and any ops still backing off) live only in the
+  // shared writer queue, which must drain before the database closes or their
+  // rows are lost. This intentionally closes the SHARED queue: this closer runs
+  // at process shutdown, after which no sink should keep writing.
+  const queueDrained = await closeWriteQueue(timeoutMs);
+  if (!queueDrained) {
+    console.error(
+      "[callLogs] write queue drain timed out during shutdown — some queued writes were lost"
+    );
+  }
 }
 
 if (shouldPersistToDisk && process.env.NODE_ENV !== "test") {
