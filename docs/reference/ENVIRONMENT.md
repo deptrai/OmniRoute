@@ -438,6 +438,7 @@ Controls how OmniRoute discovers and launches CLI sidecars (Claude Code, Codex, 
 | `DEVIN_BRIDGE_OPUS_MODEL` | `DEVIN_BRIDGE_MODEL` | `docker/devin-bridge/compose.yml` | Isolated bridge alias used when Claude Code requests its Opus default. |
 | `DEVIN_BRIDGE_HAIKU_MODEL` | `DEVIN_BRIDGE_MODEL` | `docker/devin-bridge/compose.yml` | Isolated bridge alias used when Claude Code requests its Haiku default. |
 | `DEVIN_BRIDGE_SUBAGENT_MODEL` | `DEVIN_BRIDGE_MODEL` | `docker/devin-bridge/compose.yml` | Isolated bridge alias used for Claude Code subagents. |
+| `SUBAGENT_DEFAULT_MODEL` | `claude-haiku-4.5` | `src/sse/handlers/resolveRoutingModel.ts` | Model override for requests detected as subagent (Agent/Task tool) calls — routing is redirected to this model. |
 | `DEVIN_SEAT_API_URL` | `https://server.codeium.com` | `open-sse/services/usage/devinCli.ts` | Optional override for the Codeium seat-management API used by Devin CLI quota (`GetUserStatus`). |
 | `AUGGIE_BIN`              | `auggie`    | `open-sse/executors/auggie.ts`                      | Absolute-path override for the Augment (Auggie) CLI binary used by the local `auggie` provider. Falls back to `CLI_AUGGIE_BIN`, then a PATH lookup.                            |
 | `CLI_AUGGIE_BIN`          | `auggie`    | `open-sse/executors/auggie.ts`                      | Alias override for the Augment (Auggie) CLI binary path (checked after `AUGGIE_BIN`).                                                                                          |

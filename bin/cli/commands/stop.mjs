@@ -106,11 +106,16 @@ export async function killByPort(port, deps = {}) {
   const running = deps.isPidRunning || isPidRunning;
   const wait = deps.sleep || sleep;
   const platform = deps.platform || process.platform;
+  // Injected deps mean the caller drives the behavior (unit tests); the
+  // test-environment no-op guard must not mask that path.
+  const depsInjected = Boolean(
+    deps.execFileAsync || deps.processKill || deps.isPidRunning || deps.sleep
+  );
 
   if (platform === "win32") {
-    return killByPortWin32(port, { exec, kill, running, wait });
+    return killByPortWin32(port, { exec, kill, running, wait, depsInjected });
   }
-  return killByPortPosix(port, { exec, kill, running, wait });
+  return killByPortPosix(port, { exec, kill, running, wait, depsInjected });
 }
 
 function isTestEnvironment() {
@@ -120,8 +125,8 @@ function isTestEnvironment() {
   );
 }
 
-async function killByPortPosix(port, { exec, kill, running, wait }) {
-  if (isTestEnvironment()) {
+async function killByPortPosix(port, { exec, kill, running, wait, depsInjected }) {
+  if (isTestEnvironment() && !depsInjected) {
     return true;
   }
   let pids = [];
@@ -138,8 +143,8 @@ async function killByPortPosix(port, { exec, kill, running, wait }) {
   return terminatePids(pids, { kill, running, wait });
 }
 
-async function killByPortWin32(port, { exec, kill, running, wait }) {
-  if (isTestEnvironment()) {
+async function killByPortWin32(port, { exec, kill, running, wait, depsInjected }) {
+  if (isTestEnvironment() && !depsInjected) {
     return true;
   }
   let pids = [];

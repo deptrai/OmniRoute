@@ -4,7 +4,9 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omni-binmgr-test-"));
+// realpathSync: on macOS os.tmpdir() returns the /var symlink while the code
+// under test resolves real paths (/private/var) — normalize once up front.
+const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "omni-binmgr-test-")));
 const originalDataDir = process.env.DATA_DIR;
 process.env.DATA_DIR = tmpDir;
 

@@ -14,11 +14,7 @@ import {
   selectCallLogIdsBefore,
   selectOverflowArtifactPaths,
 } from "./callLogsBoundedQueries";
-import {
-  CALL_LOGS_DIR,
-  deleteCallArtifact,
-  type CallLogDetailState,
-} from "./callLogArtifacts";
+import { CALL_LOGS_DIR, deleteCallArtifact, type CallLogDetailState } from "./callLogArtifacts";
 import { getCallLogMaxEntries, getCallLogRetentionDays, getCallLogsTableMaxRows } from "../logEnv";
 import { isSqlitePagerCorruptError, notePagerCorruption } from "../db/healthCheck";
 
@@ -91,6 +87,13 @@ type OrphanScanCursor = {
   day: fs.Dir | null;
   dayName: string | null;
   pendingDayName: string | null;
+  // Inode of baseDir (and the open day dir) captured at opendir time. If the
+  // directory is deleted and recreated underneath us — test-suite DATA_DIR
+  // wipes, external rotation — the open handle keeps iterating the unlinked
+  // inode and yields names that alias real files in the replacement dir.
+  // Detect via inode mismatch and restart the scan.
+  baseIno: number | bigint | null;
+  dayIno: number | bigint | null;
 };
 
 type OrphanScanBatch = {
@@ -100,8 +103,13 @@ type OrphanScanBatch = {
 };
 
 let orphanScanCursor: OrphanScanCursor | null = null;
+// Orphan candidates collected from the day dir whose stream is still open.
+// Deleting them mid-iteration perturbs the stream's position and can silently
+// skip surviving entries, so deletion is deferred until that day's stream
+// closes (EOF) — or forced when the pending list reaches maxCandidates.
+let pendingOrphanDeletes: { dayName: string; paths: string[] } | null = null;
 
-function closeOrphanScanCursor(): void {
+function closeOrphanScanCursor(keepPending = false): void {
   try {
     orphanScanCursor?.day?.closeSync();
   } catch {}
@@ -109,6 +117,7 @@ function closeOrphanScanCursor(): void {
     orphanScanCursor?.root.closeSync();
   } catch {}
   orphanScanCursor = null;
+  if (!keepPending) pendingOrphanDeletes = null;
 }
 
 function readOrphanCandidates(
@@ -117,18 +126,59 @@ function readOrphanCandidates(
   scanLimit: number
 ): OrphanScanBatch {
   let scannedEntries = 0;
+  if (orphanScanCursor && orphanScanCursor.baseDir === baseDir) {
+    try {
+      if (fs.statSync(baseDir).ino !== orphanScanCursor.baseIno) {
+        closeOrphanScanCursor();
+      }
+    } catch {
+      closeOrphanScanCursor();
+    }
+  }
+  if (orphanScanCursor?.day && orphanScanCursor.dayName && orphanScanCursor.baseDir === baseDir) {
+    try {
+      const ino = fs.statSync(path.join(baseDir, orphanScanCursor.dayName)).ino;
+      if (ino !== orphanScanCursor.dayIno) {
+        try {
+          orphanScanCursor.day.closeSync();
+        } catch {}
+        orphanScanCursor.day = null;
+        orphanScanCursor.dayIno = null;
+        // Re-enter via the pending path so the recreated dir is reopened by
+        // name rather than iterated through the stale handle.
+        orphanScanCursor.pendingDayName = orphanScanCursor.dayName;
+        orphanScanCursor.dayName = null;
+        // Deferred paths point at files in the replaced inode — drop them.
+        pendingOrphanDeletes = null;
+      }
+    } catch {
+      try {
+        orphanScanCursor.day?.closeSync();
+      } catch {}
+      orphanScanCursor.day = null;
+      orphanScanCursor.dayName = null;
+      orphanScanCursor.dayIno = null;
+      pendingOrphanDeletes = null;
+    }
+  }
   if (!orphanScanCursor || orphanScanCursor.baseDir !== baseDir) {
     closeOrphanScanCursor();
     if (scannedEntries >= scanLimit) {
       return { candidates: [], exhausted: false, scannedEntries };
     }
     scannedEntries++;
+    let baseIno: number | bigint | null = null;
+    try {
+      baseIno = fs.statSync(baseDir).ino;
+    } catch {}
     orphanScanCursor = {
       baseDir,
       root: fs.opendirSync(baseDir),
       day: null,
       dayName: null,
       pendingDayName: null,
+      baseIno,
+      dayIno: null,
     };
   }
 
@@ -143,6 +193,7 @@ function readOrphanCandidates(
         try {
           orphanScanCursor.day = fs.opendirSync(path.join(baseDir, dayName));
           orphanScanCursor.dayName = dayName;
+          orphanScanCursor.dayIno = fs.statSync(path.join(baseDir, dayName)).ino;
         } catch {
           continue;
         }
@@ -152,7 +203,9 @@ function readOrphanCandidates(
       scannedEntries++;
       const dayEntry = orphanScanCursor.root.readSync();
       if (!dayEntry) {
-        closeOrphanScanCursor();
+        // Natural EOF — keep deferred candidates so the caller can flush them;
+        // the day stream is already closed, so deletion is now safe.
+        closeOrphanScanCursor(true);
         exhausted = true;
         break;
       }
@@ -175,6 +228,23 @@ function readOrphanCandidates(
     candidates.push(path.posix.join(orphanScanCursor.dayName!, fileEntry.name));
   }
   return { candidates, exhausted, scannedEntries };
+}
+
+function deleteOrphanCandidates(paths: string[], baseDir: string, minAgeMs: number): number {
+  const oldEnough = paths.filter((relativePath) => {
+    if (minAgeMs <= 0) return true;
+    try {
+      return Date.now() - fs.statSync(path.join(baseDir, relativePath)).mtimeMs >= minAgeMs;
+    } catch {
+      return false;
+    }
+  });
+  const referenced = findReferencedArtifacts(oldEnough);
+  let deleted = 0;
+  for (const relativePath of oldEnough) {
+    if (!referenced.has(relativePath) && deleteCallArtifact(relativePath, baseDir)) deleted++;
+  }
+  return deleted;
 }
 
 export function cleanupOrphanCallLogFiles(
@@ -200,17 +270,51 @@ export function cleanupOrphanCallLogFiles(
       );
       remainingCandidates -= candidates.length;
       remainingScanEntries -= scannedEntries;
-      const oldEnough = candidates.filter((relativePath) => {
-        if (minAgeMs <= 0) return true;
-        try {
-          return Date.now() - fs.statSync(path.join(baseDir, relativePath)).mtimeMs >= minAgeMs;
-        } catch {
-          return false;
+
+      const openDayName = orphanScanCursor?.day ? orphanScanCursor.dayName : null;
+      // Candidates may span several day dirs in one batch; only the trailing
+      // group can belong to the still-open stream — earlier days already hit
+      // EOF, so their files are safe to delete immediately.
+      const byDay = new Map<string, string[]>();
+      for (const relativePath of candidates) {
+        const dayName = relativePath.split("/", 1)[0] || relativePath;
+        const list = byDay.get(dayName);
+        if (list) list.push(relativePath);
+        else byDay.set(dayName, [relativePath]);
+      }
+      for (const [dayName, paths] of byDay) {
+        if (dayName === openDayName) {
+          if (pendingOrphanDeletes && pendingOrphanDeletes.dayName !== dayName) {
+            deleted += deleteOrphanCandidates(pendingOrphanDeletes.paths, baseDir, minAgeMs);
+            pendingOrphanDeletes = null;
+          }
+          if (!pendingOrphanDeletes) pendingOrphanDeletes = { dayName, paths: [] };
+          pendingOrphanDeletes.paths.push(...paths);
+        } else {
+          deleted += deleteOrphanCandidates(paths, baseDir, minAgeMs);
         }
-      });
-      const referenced = findReferencedArtifacts(oldEnough);
-      for (const relativePath of oldEnough) {
-        if (!referenced.has(relativePath) && deleteCallArtifact(relativePath, baseDir)) deleted++;
+      }
+      // A deferred day's stream has since closed → its candidates can be
+      // deleted without perturbing anything.
+      if (pendingOrphanDeletes && pendingOrphanDeletes.dayName !== openDayName) {
+        deleted += deleteOrphanCandidates(pendingOrphanDeletes.paths, baseDir, minAgeMs);
+        pendingOrphanDeletes = null;
+      }
+      // Deferred list full → flush now and reopen the day stream on the next
+      // batch so unlinked entries can't hide survivors behind a stale offset.
+      if (pendingOrphanDeletes && pendingOrphanDeletes.paths.length >= maxCandidates) {
+        deleted += deleteOrphanCandidates(pendingOrphanDeletes.paths, baseDir, minAgeMs);
+        pendingOrphanDeletes = null;
+        if (orphanScanCursor?.day) {
+          const dayName = orphanScanCursor.dayName;
+          try {
+            orphanScanCursor.day.closeSync();
+          } catch {}
+          orphanScanCursor.day = null;
+          orphanScanCursor.dayIno = null;
+          orphanScanCursor.pendingDayName = dayName ?? null;
+          orphanScanCursor.dayName = null;
+        }
       }
       if (exhausted || scannedEntries === 0) break;
     }

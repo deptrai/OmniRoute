@@ -55,6 +55,10 @@ test.beforeEach(async () => {
 
 test.after(async () => {
   core.resetDbInstance();
+  // Disconnect the shared Redis client — an unreleased ioredis keeps a
+  // reconnect timer pending and pins the test process open forever.
+  const { resetRedisClient } = await import("../../src/lib/quota/redisQuotaStore.ts");
+  resetRedisClient();
   if (fs.existsSync(TEST_DATA_DIR)) {
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
@@ -169,7 +173,10 @@ test("redisQuotaStore: consume calls INCRBYFLOAT + EXPIRE and returns sliding wi
       msg.includes("Redis") ||
       msg.includes("maxRetriesPerRequest") ||
       msg.includes("Reached the max retries") ||
-      msg.includes("retry");
+      msg.includes("retry") ||
+      // enableOfflineQueue:false fails commands fast while the client is down
+      msg.includes("Connection is closed") ||
+      msg.includes("Stream isn't writeable");
     assert.ok(isExpectedError, `Unexpected error: ${msg}`);
   }
 });

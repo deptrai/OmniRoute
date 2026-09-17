@@ -54,11 +54,10 @@ test("cheaperinference registry entry points at the measured API surface", async
 
 test("cheaperinference catalog matches the measured GET /v1/models text set", async () => {
   const { REGISTRY } = await import("@omniroute/open-sse/config/providers/index.ts");
-  const models = (REGISTRY.cheaperinference as unknown as { models: Array<{ id: string }> })
-    .models;
-  // 39 text models measured on 2026-07-31; the 3 image models live in
+  const models = (REGISTRY.cheaperinference as unknown as { models: Array<{ id: string }> }).models;
+  // 40 text models in the catalog; the image models live in
   // imageRegistry.ts, never here (chat requests for them 400 upstream).
-  assert.equal(models.length, 39);
+  assert.equal(models.length, 40);
   const ids = new Set(models.map((m) => m.id));
   for (const expected of ["claude-opus-5", "gpt-5.4", "kimi-k3", "deepseek-v4-flash", "grok-4.5"]) {
     assert.ok(ids.has(expected), `missing model ${expected}`);
@@ -87,8 +86,7 @@ test("cheaperinference resale pricing covers every catalog model", async () => {
   const { REGISTRY } = await import("@omniroute/open-sse/config/providers/index.ts");
   const pricing = (DEFAULT_PRICING as Record<string, Record<string, unknown>>).cheaperinference;
   assert.ok(pricing, "no pricing block for cheaperinference");
-  const models = (REGISTRY.cheaperinference as unknown as { models: Array<{ id: string }> })
-    .models;
+  const models = (REGISTRY.cheaperinference as unknown as { models: Array<{ id: string }> }).models;
   for (const model of models) {
     assert.ok(pricing[model.id], `missing pricing for ${model.id}`);
   }

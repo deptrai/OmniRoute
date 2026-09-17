@@ -48,21 +48,38 @@ export async function getRedisClient(url: string): Promise<RedisLike> {
   }
 
   // Lazy dynamic require — ioredis is an optional dependency
-  let Redis: new (url: string) => RedisLike;
+  let Redis: new (url: string, options?: Record<string, unknown>) => RedisLike;
   try {
     const mod = await import("ioredis");
-    Redis = (mod.default ?? mod) as new (url: string) => RedisLike;
+    Redis = (mod.default ?? mod) as new (
+      url: string,
+      options?: Record<string, unknown>
+    ) => RedisLike;
   } catch {
     throw new Error("Redis driver requires ioredis package. Run npm install ioredis.");
   }
 
-  _redisClient = new Redis(url);
+  _redisClient = new Redis(url, {
+    // Quota is fail-open (B29): every caller .catch()es store errors, so a dead
+    // Redis must fail fast — never park commands in the offline queue waiting
+    // for a connection that may never come.
+    connectTimeout: 3000,
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 2,
+    // Bounded-delay reconnect keeps the client recovering in the background
+    // while commands issued mid-outage reject immediately.
+    retryStrategy: (times: number) => Math.min(times * 250, 2000),
+  });
   return _redisClient as RedisLike;
 }
 
-/** Test-only: reset the Redis singleton. */
+/** Test-only: reset the Redis singleton and drop its connection/timers. */
 export function resetRedisClient(): void {
+  const client = _redisClient as { disconnect?: () => void } | null;
   _redisClient = null;
+  try {
+    client?.disconnect?.();
+  } catch {}
 }
 
 // ---------------------------------------------------------------------------

@@ -34,7 +34,9 @@ function flatten(items: unknown[][]) {
 
 function assembleToolUseInput(events: Array<Record<string, unknown>>) {
   const jsonDeltas = events.filter(
-    (e) => e?.type === "content_block_delta" && (e.delta as Record<string, unknown>)?.type === "input_json_delta"
+    (e) =>
+      e?.type === "content_block_delta" &&
+      (e.delta as Record<string, unknown>)?.type === "input_json_delta"
   );
   const assembled = jsonDeltas
     .map((e) => (e.delta as Record<string, unknown>).partial_json as string)
@@ -101,7 +103,12 @@ test("#6459: tool-call arguments delivered as a structured object (not a JSON st
     state
   );
 
-  const events = flatten([chunk1, chunk2]) as Array<Record<string, unknown>>;
+  // The finish_reason chunk carries no usage, so the translator defers the
+  // terminal events until the caller signals end-of-stream — production calls
+  // translateResponse(..., null, state) for this (open-sse/utils/stream.ts).
+  const flush = openaiToClaudeResponse(null, state);
+
+  const events = flatten([chunk1, chunk2, flush]) as Array<Record<string, unknown>>;
   const assembled = assembleToolUseInput(events);
 
   assert.ok(assembled.length > 0, "expected at least one input_json_delta with the tool args");
@@ -114,7 +121,9 @@ test("#6459: tool-call arguments delivered as a structured object (not a JSON st
   try {
     parsed = JSON.parse(assembled);
   } catch {
-    assert.fail(`assembled partial_json is not valid JSON — arguments object was corrupted: ${assembled}`);
+    assert.fail(
+      `assembled partial_json is not valid JSON — arguments object was corrupted: ${assembled}`
+    );
   }
 
   assert.ok(Array.isArray(parsed.questions), "questions array must survive as structured data");
@@ -153,7 +162,9 @@ test("#6459 no-regression: a plain text-only turn still translates normally", ()
 
   const events = flatten([chunk1, chunk2, chunk3]) as Array<Record<string, unknown>>;
   const textDeltas = events.filter(
-    (e) => e?.type === "content_block_delta" && (e.delta as Record<string, unknown>)?.type === "text_delta"
+    (e) =>
+      e?.type === "content_block_delta" &&
+      (e.delta as Record<string, unknown>)?.type === "text_delta"
   );
 
   assert.equal(textDeltas.length, 1);
