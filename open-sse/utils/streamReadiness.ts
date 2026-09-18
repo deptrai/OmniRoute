@@ -437,6 +437,22 @@ function classifyTerminalStreamDiagnostic(
   ) {
     return { status: 429, code: "rate_limit_exceeded", type: "rate_limit_error" };
   }
+
+  // Devin Desktop emits `permission_denied` trailers for non-policy failures
+  // too (e.g. "Unable to process request due to an MCP configuration issue" —
+  // scoped to that request's tool/agent config, while sibling models on the
+  // same connection still serve). It is deterministic for the payload but NOT
+  // a connection-health signal, so it must not collapse into
+  // STREAM_EARLY_EOF/502 (which exhausts the connection via #1731v2 and cools
+  // it via markAccountUnavailable, killing remaining same-connection targets).
+  // An MCP/tool-config refusal maps to request-scoped 400; a bare
+  // permission_denied keeps the executor's own 403 semantics.
+  if (/permission_denied/i.test(diagnostic)) {
+    if (/mcp\s+configuration|mcp\s+config/i.test(diagnostic)) {
+      return { status: 400, code: "invalid_request_error", type: "invalid_request_error" };
+    }
+    return { status: 403, code: "permission_denied", type: "permission_error" };
+  }
   return null;
 }
 
