@@ -218,6 +218,15 @@ export async function deduplicate<T>(
     resolve = res;
     reject = rej;
   });
+  // When fn() fails the leader path throws AND rejects sharedPromise so late
+  // joiners see the failure — but most hashes never get a joiner, leaving a
+  // rejected promise with zero handlers → unhandledRejection → the process
+  // crash guard (httpClientAbortGuard) re-throws it as fatal and takes the
+  // whole replica down (observed in production: SEMAPHORE_TIMEOUT on a
+  // dedup-eligible non-streaming call → exit 7). Attaching a noop catch marks
+  // the stored promise "handled"; joiners still observe the rejection through
+  // their own `await existing` continuation.
+  sharedPromise.catch(() => {});
   inflight.set(hash, sharedPromise as Promise<unknown>);
 
   const timer = setTimeout(() => {
