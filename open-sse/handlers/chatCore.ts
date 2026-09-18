@@ -3551,19 +3551,19 @@ export async function handleChatCore({
                           "STREAM_RECOVERY",
                           `transparent early-retry ${attempt}/${STREAM_RECOVERY.EARLY_RETRY_MAX} after ${
                             (err as { name?: string })?.name || "truncation"
-                          }`
+                          } (provider=${provider} model=${modelToCall} conn=${attemptConnectionId ?? "unknown"})`
                         ),
                       continueStream,
                       onContinue: (attempt) =>
                         log?.warn?.(
                           "STREAM_RECOVERY",
-                          `mid-stream continuation attempt ${attempt}/${STREAM_RECOVERY.EARLY_RETRY_MAX}`
+                          `mid-stream continuation attempt ${attempt}/${STREAM_RECOVERY.EARLY_RETRY_MAX} (provider=${provider} model=${modelToCall} conn=${attemptConnectionId ?? "unknown"})`
                         ),
                       throughputWatchdog,
                       onWatchdogAbort: () =>
                         log?.warn?.(
                           "STREAM_WATCHDOG",
-                          "active upstream stream stayed below the configured useful-output rate"
+                          `active upstream stream stayed below the configured useful-output rate (provider=${provider} model=${modelToCall} conn=${attemptConnectionId ?? "unknown"})`
                         ),
                     }
                   );
