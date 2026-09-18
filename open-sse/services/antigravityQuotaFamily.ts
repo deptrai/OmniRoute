@@ -136,3 +136,28 @@ export function selectAntigravityQuotaWindowNames(
 
   return quotaNames.filter((windowName) => getAntigravityQuotaFamily(windowName) === requestedFamily);
 }
+
+/**
+ * Upper bound for Antigravity family-scope cooldowns (in-memory `family:*`
+ * model lockouts and the persisted `antigravityFamilyRateLimitedUntil` PSD
+ * lock). Upstream quota/429 responses regularly claim a far-future reset —
+ * e.g. the weekly window boundary — while the effective rate limit clears far
+ * sooner. Honoring those timestamps verbatim removes an entire account family
+ * for days. This cap bounds that blast radius: the account re-enters
+ * eligibility after at most this long and simply re-locks on the next real
+ * refusal. Override with OMNIROUTE_AGY_FAMILY_LOCK_MAX_MS.
+ */
+export const DEFAULT_AGY_FAMILY_LOCK_MAX_MS = 3_600_000;
+
+export function getAntigravityFamilyLockMaxMs(): number {
+  const raw = process.env.OMNIROUTE_AGY_FAMILY_LOCK_MAX_MS;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_AGY_FAMILY_LOCK_MAX_MS;
+}
+
+export function capAntigravityFamilyLockMs(cooldownMs: number): number {
+  if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) return cooldownMs;
+  return Math.min(cooldownMs, getAntigravityFamilyLockMaxMs());
+}

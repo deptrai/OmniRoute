@@ -50,7 +50,9 @@ import {
 import { resolveUseUpstream429BreakerHints } from "../../src/shared/utils/providerHints";
 import { getCodexModelScope } from "../config/codexQuotaScopes.ts";
 import {
+  capAntigravityFamilyLockMs,
   getQuotaScopedModelForProvider,
+  getQuotaScopeLabelForProvider,
   isAntigravityQuotaProvider,
 } from "./antigravityQuotaFamily.ts";
 import { persistAntigravityFamilyCooldownIfQuota } from "./antigravityFamilyCooldown.ts";
@@ -786,7 +788,16 @@ export function lockModel(
   ensureCleanupTimer();
   const key = getModelLockKey(provider, connectionId, model, reason);
   cleanupModelLockKey(key);
-  const newUntil = Date.now() + cooldownMs;
+  // Antigravity family-scope locks: upstream reset hints report the quota
+  // window boundary (e.g. weekly reset) rather than the effective rate-limit
+  // recovery, so a single refusal can otherwise exclude the whole family for
+  // days. Bound the family lock — the account re-enters eligibility sooner and
+  // re-locks on the next real refusal.
+  const effectiveCooldownMs =
+    getQuotaScopeLabelForProvider(provider, model) === "family"
+      ? capAntigravityFamilyLockMs(cooldownMs)
+      : cooldownMs;
+  const newUntil = Date.now() + effectiveCooldownMs;
   // Preserve the longer cooldown if an existing lock has more time remaining.
   // Safe without a mutex: no await between get/set, so this runs atomically
   // within Node.js's single-threaded event loop.
