@@ -1,6 +1,9 @@
 import { persistCodexChildCooldown } from "@omniroute/open-sse/services/codexAccount/index.ts";
 import { persistAntigravityPreflightFamilyLock } from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
-import { isAntigravityQuotaProvider } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
+import {
+  getAntigravityFamilyLockMaxMs,
+  isAntigravityQuotaProvider,
+} from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
 import { cooldownUntilMs } from "@omniroute/open-sse/services/accountFallback.ts";
 import { updateProviderConnection } from "@/lib/db/providers";
 
@@ -33,13 +36,21 @@ export async function markQuotaPreflightAccountUnavailable(
   }
 
   if (isAntigravityQuotaProvider(provider) && requestedModel?.trim()) {
+    // The family lock itself is capped inside persistAntigravityPreflightFamilyLock;
+    // clamp the reported until too so logs/account-state match the actual lock.
+    const cappedUntil = new Date(
+      Math.min(
+        Date.parse(unavailableUntil),
+        Date.now() + getAntigravityFamilyLockMaxMs()
+      )
+    ).toISOString();
     await persistAntigravityPreflightFamilyLock({
       provider,
       connectionId,
       model: requestedModel,
-      unavailableUntil,
+      unavailableUntil: cappedUntil,
     });
-    return unavailableUntil;
+    return cappedUntil;
   }
 
   const percentLabel = Number.isFinite(preflight.quotaPercent)

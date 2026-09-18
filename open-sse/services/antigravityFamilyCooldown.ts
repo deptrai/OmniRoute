@@ -4,6 +4,7 @@
  */
 import { lockModel } from "./accountFallback.ts";
 import {
+  getAntigravityFamilyLockMaxMs,
   getAntigravityQuotaFamily,
   isAntigravityQuotaProvider,
 } from "./antigravityQuotaFamily.ts";
@@ -63,13 +64,17 @@ export async function persistAntigravityFamilyCooldown(params: {
   const existingMs = parseUntilMs(untils[family]);
   const nextMs = parseUntilMs(params.rateLimitedUntil);
   if (!Number.isFinite(nextMs)) return psd;
-  if (Number.isFinite(existingMs) && existingMs > Date.now() && existingMs >= nextMs) {
+  // Upstream reset claims reach this store verbatim (weekly quota-window
+  // boundaries, not the effective rate-limit recovery) — bound the persisted
+  // family lock the same way the in-memory lockModel path does.
+  const cappedNextMs = Math.min(nextMs, Date.now() + getAntigravityFamilyLockMaxMs());
+  if (Number.isFinite(existingMs) && existingMs > Date.now() && existingMs >= cappedNextMs) {
     return psd;
   }
 
   const nextPsd: JsonRecord = {
     ...psd,
-    [FAMILY_PSD_KEY]: { ...untils, [family]: params.rateLimitedUntil },
+    [FAMILY_PSD_KEY]: { ...untils, [family]: new Date(cappedNextMs).toISOString() },
   };
   await updateProviderConnection(params.connectionId, { providerSpecificData: nextPsd });
   return nextPsd;
