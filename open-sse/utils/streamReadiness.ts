@@ -448,6 +448,15 @@ function classifyTerminalStreamDiagnostic(
   // An MCP/tool-config refusal maps to request-scoped 400; a bare
   // permission_denied keeps the executor's own 403 semantics.
   if (/permission_denied/i.test(diagnostic)) {
+    // "permission_denied: an internal error occurred" is a transient upstream
+    // fault wrapped in a permission code — NOT an auth revocation. Mapping it
+    // to 403 drives providerErrorType=FORBIDDEN → testStatus="banned", which
+    // terminally kills the connection (all later requests get "All N
+    // connection(s) banned by upstream") even though the account is healthy.
+    // Mirrors the executor's response-level guard (!internal error → 502).
+    if (/internal error/i.test(diagnostic)) {
+      return { status: 502, code: "upstream_internal_error", type: "api_error" };
+    }
     if (/mcp\s+configuration|mcp\s+config/i.test(diagnostic)) {
       return { status: 400, code: "invalid_request_error", type: "invalid_request_error" };
     }
