@@ -14,6 +14,10 @@
  * The fix classifies the trailer:
  *   - "... MCP configuration issue" → 400 invalid_request_error (request-scoped:
  *     deterministic for the payload, not a connection-health signal)
+ *   - "an internal error occurred"  → 502 upstream_internal_error (transient
+ *     upstream fault; NOT 403 — a 403 here flows through the error classifier
+ *     to providerErrorType=FORBIDDEN → testStatus="banned", terminally killing
+ *     the connection on a transient fault)
  *   - bare "permission_denied"      → 403 permission_denied (executor parity)
  * Content-policy trailers still classify as 400 content_policy_violation via
  * the earlier content-policy branch (order matters — covered below).
@@ -58,6 +62,24 @@ test("permission_denied MCP-configuration trailer → 400 invalid_request_error"
   assert.equal(res.response!.status, 400);
   const body = (await res.response!.json()) as { error?: { code?: string } };
   assert.equal(body.error?.code, "invalid_request_error");
+});
+
+test("permission_denied internal-error trailer → 502 upstream_internal_error (must NOT ban connection)", async () => {
+  // Production incident: "Devin Desktop stream error: permission_denied: an
+  // internal error occurred" classified as 403 → FORBIDDEN → testStatus="banned"
+  // → every subsequent request failed "401 All 1 connection(s) banned by
+  // upstream" while the account was actually healthy.
+  const res = await ensureStreamReadiness(
+    sseResponse([
+      errorFrame("Devin Desktop stream error: permission_denied: an internal error occurred"),
+    ]),
+    { timeoutMs: 5000, provider: "devin-desktop", model: "swe-2-max" }
+  );
+
+  assert.equal(res.ok, false);
+  assert.equal(res.code, "upstream_internal_error");
+  assert.equal(res.type, "api_error");
+  assert.equal(res.response!.status, 502);
 });
 
 test("bare permission_denied trailer → 403 permission_denied", async () => {
