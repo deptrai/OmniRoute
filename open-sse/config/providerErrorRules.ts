@@ -293,27 +293,44 @@ function buildAgentrouterRules(): ProviderErrorRule[] {
 // ─── Devin Desktop (Codeium) ───────────────────────────────────────────────
 // Devin Desktop returns rate-limit exhaustion in a gRPC-style trailer:
 //   "resource_exhausted: Reached overall message rate limit. Please try again
-//    later. Your limit will reset in 16 minutes."
-// This is an account-wide cap, not a per-request error, so the cooldown should
-// respect the upstream reset window rather than the OAuth 5s transient default.
+//    later. Your limit will reset in 16 minutes."            → account-wide cap
+//   "resource_exhausted: Reached free model rate limit. Upgrade to Max for
+//    higher limits, or switch to a different model. Your limit will reset
+//    in 1 minute."                                          → per-model cap
+// The free-model wording names a single model's bucket and even suggests
+// switching models, so only that model should lock — sibling models on the
+// same connection (swe-2-max, glm-5-3-*) keep serving. The overall wording
+// is account-wide and correctly cools the connection. Both cases should
+// respect the upstream reset window rather than the OAuth 5s transient
+// default. The status gate accepts 502 as well: a Connect/proto decode error
+// carrying the same resource_exhausted text can surface under an outer 502
+// from the stream wrapper, and the semantics do not change with the envelope.
 function buildDevinDesktopRules(): ProviderErrorRule[] {
   return [
     {
       id: "devin-desktop-resource-exhausted-reset",
       match: ({ status, body }) => {
-        if (status !== 429) return null;
+        if (status !== 429 && status !== 502) return null;
         const text = JSON.stringify(body ?? "").toLowerCase();
         if (!text.includes("resource_exhausted")) return null;
         const cooldownMs = parseResetCountdownMs(text);
-        if (cooldownMs && cooldownMs > 0) {
-          return { reason: "quota_exhausted", scope: "connection", cooldownMs };
+        const resolvedCooldownMs =
+          cooldownMs && cooldownMs > 0 ? cooldownMs : COOLDOWN_MS.rateLimit;
+        // "free model" is a per-model free-tier bucket — never cool the whole
+        // connection for it; a model lockout leaves siblings eligible.
+        if (text.includes("free model")) {
+          return {
+            reason: "rate_limit_exceeded",
+            scope: "model",
+            cooldownMs: resolvedCooldownMs,
+          };
         }
-        // No parseable reset phrase — fall back to a sensible default rather
-        // than the 5s OAuth transient cooldown.
+        // Everything else resource_exhausted (incl. "overall message rate
+        // limit") is an account-wide cap — cool the connection until reset.
         return {
-          reason: "rate_limit_exceeded",
+          reason: cooldownMs && cooldownMs > 0 ? "quota_exhausted" : "rate_limit_exceeded",
           scope: "connection",
-          cooldownMs: COOLDOWN_MS.rateLimit,
+          cooldownMs: resolvedCooldownMs,
         };
       },
     },
@@ -354,7 +371,12 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
  * mechanism (#11104) silently inert for every provider except the ones listed
  * below. See `hasOperatorRuleForProvider`.
  */
-const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter"]);
+// devin-desktop: the resource_exhausted rule distinguishes per-model
+// free-tier caps (scope "model") from account-wide "overall message rate
+// limit" caps (scope "connection") — the connection scope must be consumed,
+// otherwise an account-wide bucket would only lock one model and burn one
+// guaranteed-failed upstream call per sibling model.
+const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter", "devin-desktop"]);
 
 export function honorsRuleLockScope(provider: string | null | undefined): boolean {
   if (!provider) return false;

@@ -10,5 +10,6 @@ export const devin_desktopProvider: RegistryEntry = {
   authHeader: "Authorization",
   authPrefix: "Bearer ",
   defaultContextLength: 200000,
+  passthroughModels: true,
   models: DEVIN_MODEL_CATALOG,
 };
