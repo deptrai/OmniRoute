@@ -1512,7 +1512,13 @@ export class DevinDesktopExecutor extends BaseExecutor {
             // Preserve the original protocol/decode error below.
           }
           const safe = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
-          emitError(`Devin Desktop stream error: ${safe}`);
+          const classified = classifyDevinDesktopError(safe);
+          emitError(
+            `Devin Desktop stream error: ${safe}`,
+            classified.status,
+            classified.code,
+            classified.type
+          );
         } finally {
           activeReader?.releaseLock();
           activeReader = null;
