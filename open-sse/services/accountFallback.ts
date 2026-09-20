@@ -1646,6 +1646,7 @@ export function isDailyQuotaExhausted(errorText: string): boolean {
   return (
     lower.includes("today's quota") ||
     lower.includes("daily quota") ||
+    lower.includes("daily usage quota") ||
     lower.includes("try again tomorrow") ||
     lower.includes("tpd rate limit")
   );
@@ -2036,6 +2037,7 @@ export function checkFallbackError(
             cooldownMs: tpdMs,
             reason: RateLimitReason.QUOTA_EXHAUSTED,
             dailyQuotaExhausted: true,
+            skipProviderBreaker: true,
           };
         }
       } else {
@@ -2047,6 +2049,12 @@ export function checkFallbackError(
           cooldownMs,
           reason: RateLimitReason.QUOTA_EXHAUSTED,
           dailyQuotaExhausted: true,
+          // A model's daily quota bucket being empty is a deterministic
+          // account/model state — the connection itself is healthy and sibling
+          // models (e.g. swe-2 next to glm on the same Devin account) keep
+          // serving. Counting it toward the provider breaker blacks out the
+          // whole connection for the rest of the day for no reason.
+          skipProviderBreaker: true,
         };
       }
     }

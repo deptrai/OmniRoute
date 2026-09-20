@@ -850,6 +850,12 @@ test("isDailyQuotaExhausted detects today's quota errors", () => {
   assert.equal(isDailyQuotaExhausted("You have exceeded today's quota for model X"), true);
   assert.equal(isDailyQuotaExhausted("exceeded your daily quota"), true);
   assert.equal(isDailyQuotaExhausted("Please try again tomorrow"), true);
+  assert.equal(
+    isDailyQuotaExhausted(
+      "failed_precondition: Your daily usage quota has been exhausted. Please ensure Devin Desktop is up to date for the best experience, or visit windsurf.com to manage your plan."
+    ),
+    true
+  );
   assert.equal(isDailyQuotaExhausted("rate limit exceeded"), false);
   assert.equal(isDailyQuotaExhausted(""), false);
   assert.equal(isDailyQuotaExhausted(null), false);
@@ -919,6 +925,25 @@ test("checkFallbackError preserves OAuth 429 daily quota semantics", () => {
   assert.equal(result.reason, RateLimitReason.QUOTA_EXHAUSTED);
   assert.equal(result.dailyQuotaExhausted, true);
   assert.ok(result.cooldownMs > 0);
+});
+
+test("checkFallbackError treats devin-desktop 502 failed_precondition daily usage quota as model-scoped quota_exhausted that skips the provider breaker", () => {
+  const result = checkFallbackError(
+    502,
+    "Stream ended before producing a non-ping SSE event: Devin Desktop stream error: failed_precondition: Your daily usage quota has been exhausted. Please ensure Devin Desktop is up to date for the best experience, or visit windsurf.com to manage your plan. (trace ID: d47bf625a0e48899269888870d00a91c)",
+    0,
+    "glm-5-3-flash-low",
+    "devin-desktop",
+    null,
+    makeProfile()
+  );
+
+  assert.equal(result.shouldFallback, true);
+  assert.equal(result.reason, RateLimitReason.QUOTA_EXHAUSTED);
+  assert.equal(result.dailyQuotaExhausted, true);
+  assert.equal(result.skipProviderBreaker, true);
+  assert.ok(result.cooldownMs > 0, "cooldown should be positive");
+  assert.ok(result.cooldownMs <= 24 * 60 * 60 * 1000, "cooldown should be <= 24 hours");
 });
 
 // ModelScope daily quota lockout tests (commit 0456a1f5)
