@@ -336,6 +336,28 @@ const EXTRA_MODULE_ENTRIES = [
     "sqlite-vec-darwin-arm64",
     "sqlite-vec-windows-x64",
   ].map((pkg) => ({ label: pkg, src: ["node_modules", pkg], dest: ["node_modules", pkg] })),
+  // ioredis is a regular dependency but every consumer (redisQuotaStore.ts,
+  // rateLimiter.ts, redisCircuitBreakerStore.ts) loads it via lazy
+  // `await import("ioredis")`, so Next.js standalone tracing never emits it —
+  // QUOTA_STORE_DRIVER=redis silently falls back to sqlite without it. Copy the
+  // package plus its runtime dependency closure.
+  {
+    label: "ioredis (lazy redis driver — quota/rate-limiter stores)",
+    src: ["node_modules", "ioredis"],
+    dest: ["node_modules", "ioredis"],
+  },
+  ...[
+    "@ioredis/commands",
+    "cluster-key-slot",
+    "denque",
+    "redis-errors",
+    "redis-parser",
+    "standard-as-callback",
+  ].map((pkg) => ({
+    label: `${pkg} (ioredis dependency)`,
+    src: ["node_modules", ...pkg.split("/")],
+    dest: ["node_modules", ...pkg.split("/")],
+  })),
 ];
 
 /**
