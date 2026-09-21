@@ -349,6 +349,8 @@ const EXTRA_MODULE_ENTRIES = [
   ...[
     "@ioredis/commands",
     "cluster-key-slot",
+    "debug",
+    "ms",
     "denque",
     "redis-errors",
     "redis-parser",
