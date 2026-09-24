@@ -51,7 +51,11 @@ import {
   getQuotaScopeLabelForProvider,
   isAntigravityQuotaProvider,
 } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
-import { rehydrateAntigravityFamilyLocksForConnections, persistAntigravityFamilyCooldownIfQuota } from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
+import { isAccountSemaphoreFull } from "@omniroute/open-sse/services/accountSemaphore.ts";
+import {
+  rehydrateAntigravityFamilyLocksForConnections,
+  persistAntigravityFamilyCooldownIfQuota,
+} from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
 import { markQuotaPreflightAccountUnavailable } from "./quotaPreflightUnavailable.ts";
 import { getCreditsMode } from "@omniroute/open-sse/services/antigravityCredits.ts";
 import { preferAntigravityConnectionsWithStoredProject } from "@omniroute/open-sse/services/antigravityProjectPersistence.ts";
@@ -1812,9 +1816,27 @@ export async function getProviderCredentials(
       };
     }
 
+    // Capacity-aware: prefer connections whose account semaphore can admit work
+    // right now. A saturated or cooldown-blocked gate would only hold the
+    // request in queue until timeout — rotating to a sibling is strictly better.
+    // When every candidate is saturated, keep the full list: queueing still
+    // beats declaring the provider unavailable.
+    const withCapacity = withQuota.filter(
+      (c) =>
+        !isAccountSemaphoreFull(provider, c.id, c.maxConcurrent) &&
+        (resolvedId === provider || !isAccountSemaphoreFull(resolvedId, c.id, c.maxConcurrent))
+    );
+    const selectionPool = withCapacity.length > 0 ? withCapacity : withQuota;
+    if (withCapacity.length < withQuota.length) {
+      log.info(
+        "AUTH",
+        `${provider} | capacity-aware: ${withCapacity.length}/${withQuota.length} have free semaphore slots`
+      );
+    }
+
     const policyValidLeaseCandidates = options._leaseCandidateIds
-      ? withQuota.filter((candidate) => options._leaseCandidateIds!.includes(candidate.id))
-      : withQuota;
+      ? selectionPool.filter((candidate) => options._leaseCandidateIds!.includes(candidate.id))
+      : selectionPool;
     if (policyValidLeaseCandidates.length === 0) return null;
     const leasePolicy = await applyExclusiveConnectionLeasePolicy(
       policyValidLeaseCandidates,
@@ -2405,7 +2427,7 @@ export function isAgentrouterConnectionQuotaScope(
 }
 
 async function resolveDailyResetForProvider(
-  provider: string | null,
+  provider: string | null
 ): Promise<{ timezone?: unknown; hour?: unknown } | null> {
   if (!provider) return null;
   try {
@@ -2643,7 +2665,7 @@ export async function markAccountUnavailable(
       effectiveProviderProfile,
       null,
       null,
-      await resolveDailyResetForProvider(provider),
+      await resolveDailyResetForProvider(provider)
     );
 
     // T-PROBE: probe-origin failures (model test-all) must never remove the
@@ -2897,7 +2919,13 @@ export async function markAccountUnavailable(
         "AUTH",
         `Model-only lockout for ${provider}:${model} — ${status} ${reason} ${Math.ceil(lockout.cooldownMs / 1000)}s (failureCount=${lockout.failureCount}, connection stays active)`
       );
-      persistAntigravityFamilyCooldownIfQuota({ provider, connectionId, model, cooldownMs: lockout.cooldownMs, reason });
+      persistAntigravityFamilyCooldownIfQuota({
+        provider,
+        connectionId,
+        model,
+        cooldownMs: lockout.cooldownMs,
+        reason,
+      });
       return { shouldFallback: true, cooldownMs: lockout.cooldownMs };
     }
     const result = fallbackResult;
