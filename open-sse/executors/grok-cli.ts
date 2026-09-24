@@ -26,6 +26,7 @@ import {
   flattenGrokBuildNamespaceTools,
   restoreGrokBuildNamespaceToolCalls,
 } from "./grokCliNamespaceTools.ts";
+import { stripForeignGrokBuildReasoning } from "./grokCliReasoningReplay.ts";
 
 const GROK_BUILD_MAX_TOOLS = 200;
 const GROK_BUILD_REASONING_EFFORT_SET = new Set(GROK_BUILD_SUPPORTED_REASONING_EFFORTS);
@@ -350,6 +351,10 @@ export class GrokCliExecutor extends BaseExecutor {
 
     // OpenAI-compatible clients may carry fields the Grok Responses endpoint rejects.
     stripUnsupportedGrokBuildParams(transformed);
+    // Grok Build cannot decrypt reasoning another provider encrypted (e.g. a codex combo turn).
+    if (Array.isArray(transformed.input)) {
+      transformed.input = stripForeignGrokBuildReasoning(transformed.input);
+    }
 
     const reasoning = normalizeGrokBuildReasoning(transformed.reasoning, model);
     if (reasoning) {
