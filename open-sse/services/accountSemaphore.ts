@@ -260,6 +260,16 @@ export function acquireMany(
     return Promise.resolve(createCompositeReleaseFn(keys));
   }
 
+  // A gate in cooldown (markBlocked) cannot admit anyone until blockedUntil —
+  // queued waiters would just sit out their whole timeout. Reject immediately so
+  // the caller can rotate to a sibling account instead of wasting the budget.
+  const blockedKey = keys.find((key) => isBlocked(gates.get(key)!));
+  if (blockedKey) {
+    return Promise.reject(
+      createSemaphoreError("SEMAPHORE_BLOCKED", `Semaphore blocked for ${keys.join(",")}`)
+    );
+  }
+
   return new Promise((resolve, reject) => {
     const request: AcquireRequest = {
       keys,
