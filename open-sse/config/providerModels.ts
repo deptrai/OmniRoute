@@ -228,6 +228,11 @@ export function getModelTargetFormat(aliasOrId: string, modelId: string): string
   // executor's /codex/i routing, 9router#102). Scoped to the openai alias so other
   // providers shipping *-pro ids keep their own endpoint semantics.
   if (alias === "openai" && /-pro$/i.test(bareModelId)) return "openai-responses";
+  // Grok Build only speaks Responses: GrokCliExecutor always POSTs to /v1/responses and
+  // live discovery drops non-`responses` backends. A passthrough id that post-dates the
+  // seed (e.g. grok-4.7 before a sync) otherwise falls back to the provider's "openai"
+  // format and ships a chat-completions body, which Grok Build rejects with 400.
+  if (alias === "gc") return "openai-responses";
   // ponytail: Claude models on Vertex use rawPredict with Anthropic Messages format,
   // not the Gemini generateContent format. Mirrors executor isClaudeModel() check.
   if ((alias === "vertex" || alias === "vp") && /^claude-/i.test(bareModelId)) return "claude";
