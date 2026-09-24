@@ -263,7 +263,10 @@ USER node
 COPY --chmod=755 scripts/check-permissions.sh /app/check-permissions.sh
 ENTRYPOINT ["/app/check-permissions.sh"]
 
-HEALTHCHECK --interval=30s --timeout=30s --start-period=120s --retries=8 \
+# Cold boots on multi-GB data dirs (migrations + warmup reads) take ~6min;
+# a 120s start-period + 8x30s retry budget races the boot and kill-loops the
+# task under any IO contention. 420s grace + 6 retries = ~10min of headroom.
+HEALTHCHECK --interval=30s --timeout=30s --start-period=420s --retries=6 \
   CMD ["node", "healthcheck.mjs"]
 
 CMD ["node", "dev/run-standalone.mjs"]
