@@ -99,3 +99,37 @@ test("2534 grok-cli transformRequest leaves a tools array under the cap untouche
 
   assert.deepEqual(out.tools, tools);
 });
+
+test("grok-cli transformRequest maps max_tokens to max_output_tokens and strips max_tokens", () => {
+  const executor = new GrokCliExecutor();
+  const body = {
+    model: "grok-4.7",
+    input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+    max_tokens: 4096,
+  };
+
+  const out = executor.transformRequest("grok-4.7", body, false, {} as never) as Record<
+    string,
+    unknown
+  >;
+
+  assert.equal(out.max_output_tokens, 4096);
+  assert.equal("max_tokens" in out, false, "max_tokens must be stripped");
+});
+
+test("grok-cli transformRequest maps max_completion_tokens to max_output_tokens and strips max_completion_tokens", () => {
+  const executor = new GrokCliExecutor();
+  const body = {
+    model: "grok-4.7",
+    input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+    max_completion_tokens: 8192,
+  };
+
+  const out = executor.transformRequest("grok-4.7", body, false, {} as never) as Record<
+    string,
+    unknown
+  >;
+
+  assert.equal(out.max_output_tokens, 8192);
+  assert.equal("max_completion_tokens" in out, false, "max_completion_tokens must be stripped");
+});

@@ -43,6 +43,8 @@ const GROK_BUILD_UNSUPPORTED_PARAMS = [
   "frequency_penalty",
   "top_logprobs",
   "reasoning_effort",
+  "max_tokens",
+  "max_completion_tokens",
 ];
 // OpenAI-only `web_search` tool arguments that Grok Build rejects with
 // `400 Argument not supported: <name>`. Codex CLI sends `external_web_access` on every turn.
@@ -349,6 +351,15 @@ export class GrokCliExecutor extends BaseExecutor {
     // Grok Build applies these Responses defaults before every request.
     if (transformed.store === undefined) transformed.store = false;
     transformed.include = ensureReasoningInclude(transformed.include);
+
+    // Grok Build is Responses-only: map legacy max_tokens / max_completion_tokens
+    // to max_output_tokens so clients sending Chat Completions params don't get 400.
+    if (transformed.max_completion_tokens != null && transformed.max_output_tokens == null) {
+      transformed.max_output_tokens = transformed.max_completion_tokens;
+    }
+    if (transformed.max_tokens != null && transformed.max_output_tokens == null) {
+      transformed.max_output_tokens = transformed.max_tokens;
+    }
 
     // OpenAI-compatible clients may carry fields the Grok Responses endpoint rejects.
     stripUnsupportedGrokBuildParams(transformed);
