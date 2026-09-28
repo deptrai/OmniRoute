@@ -87,14 +87,39 @@ export function resolveSuffixEffortOverride(
 }
 
 /**
+ * Recover an explicit `-{effort}` tier from a model id whose suffix was
+ * stripped during model resolution WITHOUT recording the effort (e.g. a combo
+ * leg dispatched as `grok-cli/grok-4.7-xhigh` that resolves to base model
+ * `grok-4.7` with no `resolvedThinkingEffort`). Only recovers when the raw id
+ * is EXACTLY `<resolvedBase>-<tier>` (longest tier first so `xhigh` wins over
+ * `high`), so model ids that legitimately end in a tier-like token are never
+ * rewritten. Returns the tier or null.
+ */
+const RECOVERABLE_EFFORT_TIERS = ["xhigh", "max", "high", "medium", "low", "minimal"] as const;
+
+export function recoverEffortFromStrippedModelId(
+  rawModelStr?: string | null,
+  resolvedBaseModel?: string | null
+): string | null {
+  if (typeof rawModelStr !== "string" || typeof resolvedBaseModel !== "string") return null;
+  const segment = rawModelStr.includes("/")
+    ? rawModelStr.slice(rawModelStr.lastIndexOf("/") + 1) || ""
+    : rawModelStr;
+  if (!segment || !resolvedBaseModel) return null;
+  for (const tier of RECOVERABLE_EFFORT_TIERS) {
+    if (segment.toLowerCase() === `${resolvedBaseModel.toLowerCase()}-${tier}`) return tier;
+  }
+  return null;
+}
+
+/**
  * Apply an explicit `-{effort}` model suffix override onto an already-translated
  * dispatch body. Writes BOTH shapes because this runs after
  * `translateRequest(source → target)` in chatCore: OpenAI-shape bodies carry
  * `reasoning_effort`, Responses-shape bodies carry `reasoning.effort` — writing
- * only the former is a dead write on Responses dispatches (observed: grok-cli
- * legs kept `reasoning.effort: medium`). Only the `effort` key of an existing
- * `reasoning` object is touched; nothing else is fabricated. Returns the
- * override that was applied, or null.
+ * only the former is a dead write on Responses dispatches. Only the `effort`
+ * key of an existing `reasoning` object is touched. Returns the override that
+ * was applied, or null.
  */
 export function applySuffixEffortOverride(
   translatedBody: unknown,

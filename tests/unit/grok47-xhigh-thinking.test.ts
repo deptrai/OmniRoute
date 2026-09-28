@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 const { translateNonStreamingResponse } =
   await import("../../open-sse/handlers/responseTranslator.ts");
 const { FORMATS } = await import("../../open-sse/translator/formats.ts");
-const { resolveSuffixEffortOverride, applySuffixEffortOverride } =
+const { resolveSuffixEffortOverride, applySuffixEffortOverride, recoverEffortFromStrippedModelId } =
   await import("../../open-sse/services/defaultReasoningEffort.ts");
 
 function grokResponsesBody(summaryParts: Array<{ type: string; text: string }>) {
@@ -113,4 +113,22 @@ test("override is a no-op for other dispatch shapes", () => {
   const body = { model: "x", reasoning_effort: "medium" };
   assert.equal(applySuffixEffortOverride(body, "xhigh", undefined, FORMATS.CLAUDE), null);
   assert.equal(body.reasoning_effort, "medium");
+});
+
+test("recoverEffortFromStrippedModelId recovers the tier from a stripped id", () => {
+  assert.equal(recoverEffortFromStrippedModelId("grok-cli/grok-4.7-xhigh", "grok-4.7"), "xhigh");
+  assert.equal(recoverEffortFromStrippedModelId("grok-4.7-high", "grok-4.7"), "high");
+  // xhigh must win over high (longest tier first)
+  assert.equal(recoverEffortFromStrippedModelId("gc/grok-4.7-xhigh", "grok-4.7"), "xhigh");
+});
+
+test("recoverEffortFromStrippedModelId rejects non-exact matches", () => {
+  assert.equal(recoverEffortFromStrippedModelId("grok-cli/grok-4.7", "grok-4.7"), null);
+  assert.equal(recoverEffortFromStrippedModelId("grok-cli/grok-4.7-xhigh", "grok-4.6"), null);
+  assert.equal(
+    recoverEffortFromStrippedModelId("grok-cli/deepseek-v4-flash-low", "grok-4.7"),
+    null
+  );
+  assert.equal(recoverEffortFromStrippedModelId(null, "grok-4.7"), null);
+  assert.equal(recoverEffortFromStrippedModelId("grok-cli/grok-4.7-xhigh", null), null);
 });

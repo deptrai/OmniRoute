@@ -27,6 +27,7 @@ import {
 import { getCombo, getComboForModel, getModelInfo } from "../services/model";
 import { stripContextWindowSuffix } from "@omniroute/open-sse/services/model.ts";
 import { resolveBareModelToConnectionDefault } from "@omniroute/open-sse/services/model.ts";
+import { recoverEffortFromStrippedModelId } from "@omniroute/open-sse/services/defaultReasoningEffort.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { getImageModelEntry } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
@@ -1949,9 +1950,15 @@ async function handleSingleModelChat(
             // Explicit `-{effort}` suffix from model resolution (e.g. combo
             // target `grok-cli/grok-4.7-xhigh`) — threaded through to
             // handleChatCore's modelInfo so the suffix effort overrides
-            // translator-derived reasoning_effort. Null = no suffix.
+            // translator-derived reasoning_effort. Falls back to recovering
+            // the tier from the raw model string when resolution stripped the
+            // suffix without recording it. Null = no suffix.
             resolvedThinkingEffort:
               (resolved as { resolvedThinkingEffort?: string | null })?.resolvedThinkingEffort ??
+              recoverEffortFromStrippedModelId(
+                modelStr,
+                (resolved as { model?: string | null })?.model
+              ) ??
               null,
             providerProfile,
             cachedSettings: runtimeOptions.cachedSettings,
