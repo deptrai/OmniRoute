@@ -189,7 +189,7 @@ import { shouldUseMidConversationSystem } from "../executors/claudeIdentity.ts";
 import { normalizeClaudeHaikuConstraints } from "../services/claudeHaikuConstraints.ts";
 import {
   applyDefaultReasoningEffort,
-  resolveSuffixEffortOverride,
+  applySuffixEffortOverride,
 } from "../services/defaultReasoningEffort.ts";
 import { echoModelInObject } from "../services/responseModelEcho.ts";
 import {
@@ -2725,21 +2725,14 @@ export async function handleChatCore({
     // `grok-cli/grok-4.7-xhigh`) overrides translator-derived reasoning_effort
     // (thinking budget buckets). Unlike applyDefaultReasoningEffort above, this
     // fires even when the body already carries a derived value, and covers the
-    // Responses dispatch shape too — toResponses maps reasoning_effort onto
-    // `reasoning.effort` downstream. An explicit client output_config.effort
+    // Responses dispatch shape too. An explicit client output_config.effort
     // still wins. Without this, -xhigh variants silently run at medium.
-    const suffixEffortOverride = resolveSuffixEffortOverride(
+    applySuffixEffortOverride(
+      translatedBody,
       (modelInfo as { resolvedThinkingEffort?: string })?.resolvedThinkingEffort,
-      (body as { output_config?: { effort?: unknown } } | null)?.output_config?.effort
+      (body as { output_config?: { effort?: unknown } } | null)?.output_config?.effort,
+      targetFormat
     );
-    if (
-      suffixEffortOverride &&
-      translatedBody &&
-      typeof translatedBody === "object" &&
-      (targetFormat === FORMATS.OPENAI || targetFormat === FORMATS.OPENAI_RESPONSES)
-    ) {
-      (translatedBody as Record<string, unknown>).reasoning_effort = suffixEffortOverride;
-    }
   }
 
   // Xiaomi MiMo controls reasoning ONLY via `thinking:{type:"enabled"|"disabled"}` and

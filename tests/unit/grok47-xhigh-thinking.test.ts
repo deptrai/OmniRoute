@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 const { translateNonStreamingResponse } =
   await import("../../open-sse/handlers/responseTranslator.ts");
 const { FORMATS } = await import("../../open-sse/translator/formats.ts");
-const { resolveSuffixEffortOverride } =
+const { resolveSuffixEffortOverride, applySuffixEffortOverride } =
   await import("../../open-sse/services/defaultReasoningEffort.ts");
 
 function grokResponsesBody(summaryParts: Array<{ type: string; text: string }>) {
@@ -89,4 +89,28 @@ test("no suffix effort means no override", () => {
   assert.equal(resolveSuffixEffortOverride(null, undefined), null);
   assert.equal(resolveSuffixEffortOverride("", undefined), null);
   assert.equal(resolveSuffixEffortOverride(undefined, undefined), null);
+});
+
+test("override writes reasoning_effort on OpenAI-shape bodies", () => {
+  const body = { model: "grok-4.7", reasoning_effort: "medium" };
+  const applied = applySuffixEffortOverride(body, "xhigh", undefined, FORMATS.OPENAI);
+  assert.equal(applied, "xhigh");
+  assert.equal(body.reasoning_effort, "xhigh");
+});
+
+test("override writes reasoning.effort on Responses-shape bodies", () => {
+  const body = {
+    model: "grok-4.7",
+    reasoning: { effort: "medium", summary: "auto" },
+  };
+  const applied = applySuffixEffortOverride(body, "xhigh", undefined, FORMATS.OPENAI_RESPONSES);
+  assert.equal(applied, "xhigh");
+  assert.equal(body.reasoning.effort, "xhigh");
+  assert.equal(body.reasoning.summary, "auto");
+});
+
+test("override is a no-op for other dispatch shapes", () => {
+  const body = { model: "x", reasoning_effort: "medium" };
+  assert.equal(applySuffixEffortOverride(body, "xhigh", undefined, FORMATS.CLAUDE), null);
+  assert.equal(body.reasoning_effort, "medium");
 });

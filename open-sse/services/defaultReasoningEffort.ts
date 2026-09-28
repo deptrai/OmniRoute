@@ -13,6 +13,7 @@
 // chatCore.ts, after model resolution, so the *upstream* model's default is
 // used even when a combo/route substituted it.
 import { getModelSpec } from "@/shared/constants/modelSpecs.ts";
+import { FORMATS } from "../translator/formats.ts";
 
 /** True when `body` already expresses a reasoning-effort choice, in any known shape. */
 function hasExplicitReasoningField(body: Record<string, unknown>): boolean {
@@ -83,4 +84,37 @@ export function resolveSuffixEffortOverride(
   if (typeof suffixEffort !== "string" || suffixEffort.trim().length === 0) return null;
   if (typeof clientOutputEffort === "string" && clientOutputEffort.trim().length > 0) return null;
   return suffixEffort;
+}
+
+/**
+ * Apply an explicit `-{effort}` model suffix override onto an already-translated
+ * dispatch body. Writes BOTH shapes because this runs after
+ * `translateRequest(source → target)` in chatCore: OpenAI-shape bodies carry
+ * `reasoning_effort`, Responses-shape bodies carry `reasoning.effort` — writing
+ * only the former is a dead write on Responses dispatches (observed: grok-cli
+ * legs kept `reasoning.effort: medium`). Only the `effort` key of an existing
+ * `reasoning` object is touched; nothing else is fabricated. Returns the
+ * override that was applied, or null.
+ */
+export function applySuffixEffortOverride(
+  translatedBody: unknown,
+  suffixEffort?: string | null,
+  clientOutputEffort?: unknown,
+  targetFormat?: string
+): string | null {
+  const override = resolveSuffixEffortOverride(suffixEffort, clientOutputEffort);
+  if (!override) return null;
+  if (!translatedBody || typeof translatedBody !== "object" || Array.isArray(translatedBody)) {
+    return null;
+  }
+  if (targetFormat !== FORMATS.OPENAI && targetFormat !== FORMATS.OPENAI_RESPONSES) {
+    return null;
+  }
+  const body = translatedBody as Record<string, unknown>;
+  body.reasoning_effort = override;
+  const reasoning = body.reasoning;
+  if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+    (reasoning as Record<string, unknown>).effort = override;
+  }
+  return override;
 }
