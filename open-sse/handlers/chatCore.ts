@@ -187,7 +187,10 @@ import {
 } from "../services/claudeAdaptiveThinking.ts";
 import { shouldUseMidConversationSystem } from "../executors/claudeIdentity.ts";
 import { normalizeClaudeHaikuConstraints } from "../services/claudeHaikuConstraints.ts";
-import { applyDefaultReasoningEffort } from "../services/defaultReasoningEffort.ts";
+import {
+  applyDefaultReasoningEffort,
+  resolveSuffixEffortOverride,
+} from "../services/defaultReasoningEffort.ts";
 import { echoModelInObject } from "../services/responseModelEcho.ts";
 import {
   stripGpt5SamplingWhenReasoning,
@@ -2717,6 +2720,25 @@ export async function handleChatCore({
         (modelInfo as { resolvedThinkingEffort?: string })?.resolvedThinkingEffort,
         (modelInfo as { defaultThinkingEffort?: string })?.defaultThinkingEffort
       );
+    }
+    // Explicit `-{effort}` model suffix (e.g. a combo target of
+    // `grok-cli/grok-4.7-xhigh`) overrides translator-derived reasoning_effort
+    // (thinking budget buckets). Unlike applyDefaultReasoningEffort above, this
+    // fires even when the body already carries a derived value, and covers the
+    // Responses dispatch shape too — toResponses maps reasoning_effort onto
+    // `reasoning.effort` downstream. An explicit client output_config.effort
+    // still wins. Without this, -xhigh variants silently run at medium.
+    const suffixEffortOverride = resolveSuffixEffortOverride(
+      (modelInfo as { resolvedThinkingEffort?: string })?.resolvedThinkingEffort,
+      (body as { output_config?: { effort?: unknown } } | null)?.output_config?.effort
+    );
+    if (
+      suffixEffortOverride &&
+      translatedBody &&
+      typeof translatedBody === "object" &&
+      (targetFormat === FORMATS.OPENAI || targetFormat === FORMATS.OPENAI_RESPONSES)
+    ) {
+      (translatedBody as Record<string, unknown>).reasoning_effort = suffixEffortOverride;
     }
   }
 

@@ -56,3 +56,31 @@ export function applyDefaultReasoningEffort<T extends Record<string, unknown>>(
 
   return { ...body, reasoning_effort: defaultEffort };
 }
+
+/**
+ * Explicit `-{effort}` model suffix override (e.g. a combo target of
+ * `grok-cli/grok-4.7-xhigh`).
+ *
+ * The request translators derive `reasoning_effort` from client thinking
+ * controls (Claude `output_config.effort`, `thinking.budget_tokens` buckets)
+ * BEFORE model resolution, so by the time `modelInfo.resolvedThinkingEffort`
+ * is known the body may already carry a translator-derived value (e.g.
+ * budget 2000 → `medium`). A `-{effort}` suffix is an explicit operator model
+ * selection and must win over that derived value — otherwise picking an
+ * `-xhigh` variant silently runs at `medium` (observed: grok-4.7-xhigh served
+ * with `reasoning.effort: medium` and near-empty thinking).
+ *
+ * Priority: explicit client `output_config.effort` > suffix effort >
+ * translator-derived value. Returns the suffix effort to force, or null when
+ * no override applies. The caller writes it as `reasoning_effort`; the
+ * Responses-shape conversion (`toResponses`) and per-provider sanitation
+ * (`reasoningEffort.ts`) clamp it downstream as usual.
+ */
+export function resolveSuffixEffortOverride(
+  suffixEffort?: string | null,
+  clientOutputEffort?: unknown
+): string | null {
+  if (typeof suffixEffort !== "string" || suffixEffort.trim().length === 0) return null;
+  if (typeof clientOutputEffort === "string" && clientOutputEffort.trim().length > 0) return null;
+  return suffixEffort;
+}

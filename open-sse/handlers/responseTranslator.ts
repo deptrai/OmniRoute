@@ -262,6 +262,15 @@ export function translateNonStreamingResponse(
     }
     if (reasoningSummary) {
       message.reasoning_summary = [{ type: "summary_text", text: reasoningSummary }];
+      if (!message.reasoning_content) {
+        // Upstream exposed thinking ONLY as Responses summary_text (e.g. Grok
+        // opaque reasoning has no replayable reasoning_text). Mirror it onto
+        // reasoning_content so downstream converters (Claude thinking blocks,
+        // OpenAI reasoning_content clients) render it instead of dropping it.
+        // Encrypted-only reasoning leaves reasoningSummary empty, so nothing
+        // is fabricated here (#7243 stays intact).
+        message.reasoning_content = reasoningSummary;
+      }
     }
     if (toolCalls.length > 0) {
       message.tool_calls = toolCalls;
