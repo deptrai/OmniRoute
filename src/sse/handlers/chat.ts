@@ -1946,6 +1946,13 @@ async function handleSingleModelChat(
             extendedContext,
             modelApiFormat: apiFormat,
             modelTargetFormat: targetFormat,
+            // Explicit `-{effort}` suffix from model resolution (e.g. combo
+            // target `grok-cli/grok-4.7-xhigh`) — threaded through to
+            // handleChatCore's modelInfo so the suffix effort overrides
+            // translator-derived reasoning_effort. Null = no suffix.
+            resolvedThinkingEffort:
+              (resolved as { resolvedThinkingEffort?: string | null })?.resolvedThinkingEffort ??
+              null,
             providerProfile,
             cachedSettings: runtimeOptions.cachedSettings,
             skipUpstreamRetry: runtimeOptions.skipUpstreamRetry ?? false,

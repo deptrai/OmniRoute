@@ -445,6 +445,12 @@ export async function executeChatWithBreaker({
   // for every non-video request. Passed straight through to handleChatCore;
   // see its own destructure default for the shape and consumers.
   videoBridgeLog = undefined,
+  // Explicit `-{effort}` model suffix resolved at model-resolution time
+  // (e.g. a combo target of `grok-cli/grok-4.7-xhigh`). executeChatWithBreaker
+  // rebuilds a minimal modelInfo for handleChatCore, which would otherwise drop
+  // this metadata and silently run -xhigh variants at the translator-derived
+  // effort. Null = no suffix, previous behavior unchanged.
+  resolvedThinkingEffort = null,
 }: ExecuteChatWithBreakerOptions): Promise<ExecuteChatWithBreakerResult> {
   let tlsFingerprintUsed = false;
   const normalizedTrafficType: TrafficType =
@@ -489,6 +495,7 @@ export async function executeChatWithBreaker({
               extendedContext,
               apiFormat: modelApiFormat,
               targetFormat: modelTargetFormat,
+              resolvedThinkingEffort,
             },
             credentials: refreshedCredentials,
             log: handlerLog,
